@@ -58,7 +58,9 @@ fn main() {
             mcp::commands::get_mcp_servers,
             mcp::commands::get_mcp_tools,
             mcp::commands::save_mcp_servers,
-            mcp::commands::refresh_mcp
+            mcp::commands::refresh_mcp,
+            mcp::commands::get_workspace,
+            mcp::commands::set_workspace
         ])
         .run(tauri::generate_context!())
         .expect("error while running LiteChat");

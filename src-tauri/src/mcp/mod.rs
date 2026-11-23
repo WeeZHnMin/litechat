@@ -58,7 +58,7 @@ pub struct McpServerStatus {
 type Client = RunningService<rmcp::service::RoleClient, ()>;
 
 pub struct McpManager {
-    workspace: std::path::PathBuf,
+    workspace: Mutex<std::path::PathBuf>,
     configs: Mutex<Vec<McpServerConfig>>,
     clients: AsyncMutex<HashMap<String, Client>>,
     tools: AsyncMutex<HashMap<String, Vec<McpToolInfo>>>,
@@ -67,6 +67,70 @@ pub struct McpManager {
 
 pub fn tool_key(server: &str, tool: &str) -> String {
     format!("{server}__{tool}")
+}
+
+#[cfg(windows)]
+const WINDOWS_EXTS: [&str; 6] = ["exe", "cmd", "bat", "com", "ps1", "py"];
+
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    if name.contains('\\') || name.contains('/') {
+        let path = std::path::Path::new(name);
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    let paths = std::env::var_os("PATH")?;
+    #[cfg(windows)]
+    let pathext: Vec<String> = {
+        let raw = std::env::var("PATHEXT").unwrap_or_default();
+        let mut list: Vec<String> = raw
+            .split(';')
+            .filter(|part| !part.is_empty())
+            .map(|part| part.trim_start_matches('.').to_ascii_lowercase())
+            .collect();
+        for ext in WINDOWS_EXTS {
+            let ext = ext.to_string();
+            if !list.contains(&ext) {
+                list.push(ext);
+            }
+        }
+        list
+    };
+    for dir in std::env::split_paths(&paths) {
+        let direct = dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        #[cfg(windows)]
+        {
+            for ext in &pathext {
+                let candidate = dir.join(format!("{name}.{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = &dir;
+        }
+    }
+    None
+}
+
+fn resolve_program(command: &str) -> Result<std::path::PathBuf, String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err("启动命令为空".into());
+    }
+    which(trimmed).ok_or_else(|| {
+        format!(
+            "找不到可执行文件 “{trimmed}”。请确认已安装并在 PATH 中，或填写完整路径{}",
+            if cfg!(windows) {
+                "（Windows 上 npx/uvx 等通常是 .cmd 文件，如 C:\\Program Files\\nodejs\\npx.cmd）"
+            } else {
+                ""
+            }
+        )
+    })
 }
 
 fn parse_local_tools(source: Value) -> Vec<McpToolInfo> {
@@ -135,7 +199,7 @@ fn result_text(result: &rmcp::model::CallToolResult) -> String {
 impl McpManager {
     pub fn new(workspace: std::path::PathBuf) -> Self {
         Self {
-            workspace,
+            workspace: Mutex::new(workspace),
             configs: Mutex::new(Vec::new()),
             clients: AsyncMutex::new(HashMap::new()),
             tools: AsyncMutex::new(HashMap::new()),
@@ -143,8 +207,17 @@ impl McpManager {
         }
     }
 
-    pub fn workspace(&self) -> &std::path::Path {
-        &self.workspace
+    pub fn workspace(&self) -> std::path::PathBuf {
+        self.workspace
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_else(|_| std::env::temp_dir())
+    }
+
+    pub fn set_workspace_path(&self, path: std::path::PathBuf) {
+        if let Ok(mut current) = self.workspace.lock() {
+            *current = path;
+        }
     }
 
     pub fn set_configs(&self, configs: Vec<McpServerConfig>) {
@@ -180,7 +253,8 @@ impl McpManager {
     }
 
     async fn connect(&self, config: &McpServerConfig) -> Result<Vec<McpToolInfo>, String> {
-        let command = Command::new(&config.command).configure(|cmd| {
+        let program = resolve_program(&config.command)?;
+        let command = Command::new(&program).configure(|cmd| {
             cmd.args(&config.args).envs(&config.env);
         });
         let transport = TokioChildProcess::new(command)
@@ -260,9 +334,15 @@ impl McpManager {
         builtin::tool_names().contains(&tool) || files::tool_names().contains(&tool)
     }
 
-    pub async fn call(&self, server: &str, tool: &str, arguments: Value) -> Result<String, String> {
+    pub async fn call(
+        &self,
+        app: &tauri::AppHandle,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<String, String> {
         if server == BUILTIN_SERVER {
-            return self.call_builtin(tool, arguments).await;
+            return self.call_builtin(app, tool, arguments).await;
         }
         let clients = self.clients.lock().await;
         let client = clients
@@ -282,13 +362,58 @@ impl McpManager {
         Ok(result_text(&result))
     }
 
-    pub async fn call_builtin(&self, tool: &str, arguments: Value) -> Result<String, String> {
+    pub async fn call_builtin(
+        &self,
+        app: &tauri::AppHandle,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<String, String> {
         if tool == builtin::list_tools_tool() {
             let tools = self.tools().await;
             return Ok(builtin::describe_tools(&tools));
         }
+        if tool == builtin::ADD_SERVER_TOOL {
+            let name = arguments
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or("缺少 name 参数")?;
+            let command = arguments
+                .get("command")
+                .and_then(Value::as_str)
+                .ok_or("缺少 command 参数")?;
+            let args: Vec<String> = arguments
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let env = arguments
+                .get("env")
+                .and_then(Value::as_object)
+                .map(|map| {
+                    map.iter()
+                        .filter_map(|(key, value)| {
+                            value.as_str().map(|text| (key.clone(), text.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            return commands::install_server(app, name, command, args, env).await;
+        }
+        if tool == builtin::REMOVE_SERVER_TOOL {
+            let name = arguments
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or("缺少 name 参数")?;
+            return commands::uninstall_server(app, name).await;
+        }
         if files::tool_names().contains(&tool) {
-            let root = self.workspace.clone();
+            let root = self.workspace();
             return files::call(&root, tool, &arguments);
         }
         builtin::call(tool, &arguments).await
@@ -337,6 +462,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolves_programs_through_path_and_extensions() {
+        #[cfg(windows)]
+        {
+            let resolved = resolve_program("cmd");
+            assert!(resolved.is_ok(), "cmd 应该能在 PATH 中找到");
+            let path = resolved.unwrap();
+            assert!(path.to_string_lossy().to_lowercase().ends_with(".exe"));
+        }
+    }
+
+    #[test]
+    fn reports_missing_program_clearly() {
+        let error = resolve_program("definitely-not-a-real-command-xyz").unwrap_err();
+        assert!(error.contains("找不到可执行文件"));
+    }
+
+    #[test]
+    fn rejects_empty_program() {
+        assert!(resolve_program("   ").is_err());
+    }
+
+    #[test]
     fn tool_keys_are_namespaced() {
         assert_eq!(tool_key("files", "read"), "files__read");
         assert_eq!(tool_key("shell", "run_command"), "shell__run_command");
@@ -346,7 +493,10 @@ mod tests {
     fn builtin_tools_always_available() {
         let manager = McpManager::new(std::env::temp_dir());
         let tools = manager.builtin_tools();
-        assert_eq!(tools.len(), 3 + files::tool_names().len());
+        assert_eq!(
+            tools.len(),
+            builtin::tool_names().len() + files::tool_names().len()
+        );
         manager.set_configs(vec![]);
         assert_eq!(manager.builtin_tools().len(), tools.len());
     }

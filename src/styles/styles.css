@@ -361,6 +361,10 @@ button {
   font-size: 9px;
 }
 
+.field-hint.is-error {
+  color: #c25050;
+}
+
 .path-hint {
   margin: 0 0 4px !important;
   overflow: hidden;
@@ -438,8 +442,111 @@ button {
   font-size: 10px;
 }
 
+.mcp-presets {
+  margin-top: 14px;
+}
+
+.mcp-presets-title {
+  margin: 0 0 8px !important;
+  color: #888;
+  font-size: 10px;
+}
+
+.mcp-preset-grid {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mcp-preset {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid #e6e6e6;
+  border-radius: 9px;
+  text-align: left;
+  background: #fbfbfb;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.mcp-preset:hover {
+  border-color: #bbb;
+  background: #f4f4f4;
+}
+
+.mcp-preset strong {
+  color: #333;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.mcp-preset span {
+  color: #999;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.mcp-step {
+  display: flex;
+  gap: 9px;
+  margin: 14px 0;
+}
+
+.mcp-step:first-child {
+  margin-top: 6px;
+}
+
+.mcp-step-num {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #555;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.mcp-step > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.mcp-step p {
+  margin: 5px 0;
+}
+
+.mcp-compare {
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: #f6f6f6;
+  line-height: 2;
+}
+
+.mcp-compare span {
+  color: #999;
+  font-size: 9px;
+}
+
+.mcp-code {
+  max-height: 260px;
+  margin: 7px 0;
+  padding: 9px 11px;
+  overflow: auto;
+  border-radius: 7px;
+  background: #f6f6f6;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+  line-height: 1.65;
+  white-space: pre;
+}
+
 .mcp-help {
-  margin-top: 12px;
+  margin-top: 14px;
   border: 1px solid #ececec;
   border-radius: 9px;
   background: #fbfbfb;
@@ -965,6 +1072,13 @@ button {
   .mcp-help-examples li { border-top-color: #2a2b2b; }
   .mcp-help-examples span { color: #777; }
   .mcp-help-note { border-top-color: #2a2b2b; color: #777; }
+  .mcp-preset { border-color: #333434; background: #1b1c1c; }
+  .mcp-preset:hover { border-color: #666; background: #202121; }
+  .mcp-preset strong { color: #ddd; }
+  .mcp-preset span { color: #888; }
+  .mcp-step-num { color: #191919; background: #bbb; }
+  .mcp-compare { background: #1f2020; }
+  .mcp-code { background: #1f2020; color: #bbb; }
   .stop-button { border-color: #3b3c3c; color: #ccc; background: #242525; }
   .stop-button:hover { border-color: #777; background: #303131; }
   .thinking-toggle { border-color: #3b3c3c; color: #777; }

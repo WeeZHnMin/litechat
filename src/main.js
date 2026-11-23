@@ -10,6 +10,7 @@ import { installGlobalContextMenuGuard } from "./ui/context-menu";
 import { createConversationRunner } from "./chat/conversation";
 import { initHistory } from "./chat/history";
 import { initMcpSettings } from "./settings/mcp-settings";
+import { initWorkspaceSettings } from "./settings/workspace-settings";
 import { initModelSettings } from "./settings/model-settings";
 import { initSettings } from "./settings/settings";
 import { renderShell } from "./app/shell";
@@ -58,6 +59,7 @@ modelSettings = initModelSettings({
   onThinkingChange: (enabled) => composer.setThinking(enabled),
 });
 initMcpSettings();
+initWorkspaceSettings();
 
 document.addEventListener("keydown", (event) => manager.handleKeyDown(event), true);
 

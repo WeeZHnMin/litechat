@@ -238,7 +238,7 @@ async fn run_turn(
             );
             let outcome = app
                 .state::<McpManager>()
-                .call(server, tool, arguments)
+                .call(&app, server, tool, arguments)
                 .await;
             let (output, error) = match outcome {
                 Ok(text) => (text, None),

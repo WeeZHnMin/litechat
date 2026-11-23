@@ -37,12 +37,13 @@ pub fn initialize(app: &AppHandle) {
 
 #[tauri::command]
 pub fn get_workspace(app: AppHandle) -> Result<String, String> {
-    Ok(crate::paths::workspace(&app).display().to_string())
+    Ok(app.state::<McpManager>().workspace().display().to_string())
 }
 
 #[tauri::command]
 pub fn set_workspace(app: AppHandle, path: String) -> Result<String, String> {
     let resolved = crate::paths::set_workspace(&app, &path)?;
+    app.state::<McpManager>().set_workspace_path(resolved.clone());
     Ok(resolved.display().to_string())
 }
 
@@ -87,4 +88,85 @@ pub async fn refresh_mcp(app: AppHandle) -> Result<Vec<McpServerStatus>, String>
     let manager = app.state::<McpManager>();
     manager.refresh().await;
     Ok(manager.statuses().await)
+}
+
+pub async fn install_server(
+    app: &AppHandle,
+    name: &str,
+    command: &str,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    let trimmed_name = name.trim();
+    if trimmed_name.is_empty() {
+        return Err("服务名称不能为空".into());
+    }
+    if trimmed_name == crate::mcp::BUILTIN_SERVER {
+        return Err("shell 是保留名称，请换一个".into());
+    }
+    if command.trim().is_empty() {
+        return Err("启动命令不能为空".into());
+    }
+    let mut configs = load(app);
+    if configs.iter().any(|item| item.name == trimmed_name) {
+        return Err(format!("已存在名为 {trimmed_name} 的服务，请直接使用或先移除"));
+    }
+    let previous = configs.clone();
+    configs.push(McpServerConfig {
+        name: trimmed_name.to_string(),
+        command: command.trim().to_string(),
+        args,
+        env,
+        enabled: true,
+    });
+
+    let manager = app.state::<McpManager>();
+    manager.set_configs(configs.clone());
+    let tools = manager.refresh().await;
+    let status = manager.statuses().await;
+    let entry = status
+        .iter()
+        .find(|item| item.name == trimmed_name)
+        .ok_or("保存后未找到该服务")?;
+
+    if let Some(error) = &entry.error {
+        manager.set_configs(previous.clone());
+        let _ = save(app, &previous);
+        manager.refresh().await;
+        return Err(format!("连接失败，已回滚：{error}"));
+    }
+    save(app, &configs)?;
+    let names: Vec<String> = tools
+        .iter()
+        .filter(|tool| tool.server == trimmed_name)
+        .map(|tool| tool.name.clone())
+        .collect();
+    if names.is_empty() {
+        return Ok(format!(
+            "已添加服务 {trimmed_name}，但它没有声明任何工具"
+        ));
+    }
+    Ok(format!(
+        "已添加服务 {trimmed_name}，可用工具 {} 个：{}",
+        names.len(),
+        names.join("、")
+    ))
+}
+
+pub async fn uninstall_server(app: &AppHandle, name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed == crate::mcp::BUILTIN_SERVER {
+        return Err("shell 是内置服务，不能移除".into());
+    }
+    let mut configs = load(app);
+    let before = configs.len();
+    configs.retain(|item| item.name != trimmed);
+    if configs.len() == before {
+        return Err(format!("没有找到名为 {trimmed} 的服务"));
+    }
+    let manager = app.state::<McpManager>();
+    manager.set_configs(configs.clone());
+    manager.refresh().await;
+    save(app, &configs)?;
+    Ok(format!("已移除服务 {trimmed}，它的工具不再可用"))
 }

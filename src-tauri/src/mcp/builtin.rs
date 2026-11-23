@@ -38,6 +38,31 @@ const TOOLS: &str = r#"[
       "properties": {},
       "required": []
     }
+  },
+  {
+    "name": "add_mcp_server",
+    "description": "为用户添加一个新的外部 MCP 工具服务。当用户说「把某个服务加到 MCP」「帮我装个 XX 工具」时使用。服务会被立即启动并验证：连接失败会自动回滚且不会保存，成功则新工具立即可用。请先用 list_tools 确认名称没有重复。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "服务的唯一标识，如 filesystem、github" },
+        "command": { "type": "string", "description": "启动命令，如 npx、uvx、python、D:\\\\tools\\\\x.exe" },
+        "args": { "type": "array", "items": { "type": "string" }, "description": "命令参数，如 [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"D:\\\\work\"]" },
+        "env": { "type": "object", "description": "额外的环境变量，通常省略" }
+      },
+      "required": ["name", "command"]
+    }
+  },
+  {
+    "name": "remove_mcp_server",
+    "description": "移除一个外部 MCP 工具服务并停止它的进程。当用户说「把 XX 服务删掉 / 停用」「不需要这个工具了」时使用。内置的 shell 服务不能移除。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "要移除的服务名称，可先用 list_tools 查看" }
+      },
+      "required": ["name"]
+    }
   }
 ]"#;
 
@@ -122,8 +147,17 @@ pub fn list_tools_tool() -> &'static str {
     "list_tools"
 }
 
+pub const ADD_SERVER_TOOL: &str = "add_mcp_server";
+pub const REMOVE_SERVER_TOOL: &str = "remove_mcp_server";
+
 pub fn tool_names() -> Vec<&'static str> {
-    vec!["run_command", "run_shell", list_tools_tool()]
+    vec![
+        "run_command",
+        "run_shell",
+        list_tools_tool(),
+        ADD_SERVER_TOOL,
+        REMOVE_SERVER_TOOL,
+    ]
 }
 
 pub async fn call(tool: &str, arguments: &Value) -> Result<String, String> {
@@ -179,11 +213,37 @@ mod tests {
     fn exposes_expected_tools() {
         let list = tools();
         let array = list.as_array().expect("array");
-        assert_eq!(array.len(), 3);
-        assert_eq!(array[0]["name"], "run_command");
-        assert_eq!(array[1]["name"], "run_shell");
-        assert_eq!(array[2]["name"], "list_tools");
+        let names: Vec<&str> = array.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "run_command",
+                "run_shell",
+                "list_tools",
+                "add_mcp_server",
+                "remove_mcp_server"
+            ]
+        );
         assert_eq!(array[0]["inputSchema"]["required"][0], "command");
+    }
+
+    #[test]
+    fn add_and_remove_tools_require_name() {
+        let add = tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "add_mcp_server")
+            .cloned()
+            .unwrap();
+        let required: Vec<&str> = add["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"name"));
+        assert!(required.contains(&"command"));
     }
 
     #[test]

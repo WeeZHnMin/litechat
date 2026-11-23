@@ -98,31 +98,129 @@ export function renderShell() {
           </div>
         </section>
         <section class="settings-section">
+          <h2>文件工具</h2>
+          <p>内置的文件读写工具只能访问这个目录及其子目录。</p>
+          <div class="setting-field">
+            <label for="workspace-path">工作目录</label>
+            <div class="key-row">
+              <input id="workspace-path" type="text" spellcheck="false" autocomplete="off" placeholder="选择目录" />
+              <button class="plain-button" id="workspace-save" type="button">保存</button>
+            </div>
+            <span class="field-hint" id="workspace-hint">所有相对路径都基于此目录</span>
+          </div>
+        </section>
+        <section class="settings-section">
           <h2>MCP 工具服务</h2>
           <p>通过 stdio 启动本机进程，模型可调用其声明的工具。修改后点「保存并重连」。</p>
           <p class="mcp-summary" id="mcp-summary">尚未配置任何工具服务</p>
+          <div class="mcp-list" id="mcp-list"></div>
+          <div class="mcp-presets" id="mcp-presets">
+            <p class="mcp-presets-title">不想手填？点一个直接加进来：</p>
+            <div class="mcp-preset-grid">
+              <button class="mcp-preset" type="button" data-preset="filesystem">
+                <strong>文件读写（官方）</strong>
+                <span>需要 Node，在设置里选目录</span>
+              </button>
+              <button class="mcp-preset" type="button" data-preset="fetch">
+                <strong>网页抓取（官方）</strong>
+                <span>需要 uv，读取 URL 内容</span>
+              </button>
+              <button class="mcp-preset" type="button" data-preset="memory">
+                <strong>记忆存储（官方）</strong>
+                <span>需要 Node，跨对话记住信息</span>
+              </button>
+              <button class="mcp-preset" type="button" data-preset="custom">
+                <strong>自定义 / 我自己写</strong>
+                <span>看到下面的说明</span>
+              </button>
+            </div>
+          </div>
           <details class="mcp-help" id="mcp-help">
-            <summary>如何添加一个 MCP 服务？</summary>
+            <summary>我要接自己写的程序，怎么填？</summary>
             <div class="mcp-help-body">
-              <p><strong>原理</strong>：MCP 是一个基于 JSON-RPC 的开放协议。LiteChat 启动你填写的命令，通过 stdin/stdout 与它握手，然后读取它声明的工具。任何实现了该协议的程序都可以接入，不限于 npm 包。</p>
-              <p><strong>需要填三项</strong></p>
-              <ol>
-                <li><code>名称</code>：唯一标识，工具会显示为 <code>名称__工具名</code></li>
-                <li><code>命令</code>：可执行文件或包管理器</li>
-                <li><code>参数</code>：空格分隔</li>
-              </ol>
-              <p><strong>常见写法</strong></p>
-              <ul class="mcp-help-examples">
-                <li><code>npx</code> + <code>-y @modelcontextprotocol/server-filesystem D:\work</code><span>Node 包，官方文件系统服务</span></li>
-                <li><code>uvx</code> + <code>mcp-server-fetch</code><span>Python 包，需要先装 uv</span></li>
-                <li><code>D:\tools\my-mcp.exe</code> + 留空<span>本地编译好的可执行文件</span></li>
-                <li><code>python</code> + <code>D:\mcp\server.py</code><span>本地 Python 脚本</span></li>
-              </ul>
-              <p><strong>排查</strong>：服务会随应用启动，连接失败时该行会显示具体错误。手动排查可在终端直接运行同样的命令——如果它不在等待 stdin 输入，说明不是合法的 stdio MCP 服务。</p>
-              <p class="mcp-help-note">内置的 shell 工具（run_command / run_shell）不在此列表中，始终启用。</p>
+              <div class="mcp-step">
+                <span class="mcp-step-num">1</span>
+                <div>
+                  <p><strong>先理解一件事</strong></p>
+                  <p>MCP 服务不是「普通的命令行程序」。普通程序跑完就退出；MCP 服务要一直挂着，通过标准输入输出跟 LiteChat 收发消息。</p>
+                  <p class="mcp-compare">
+                    <code>my_exam.exe -upload a.txt</code> <span>← 普通程序，跑完退出，不能直接填</span><br />
+                    <code>my_exam-mcp.exe</code> <span>← MCP 服务，一直等待指令，可以填</span>
+                  </p>
+                </div>
+              </div>
+              <div class="mcp-step">
+                <span class="mcp-step-num">2</span>
+                <div>
+                  <p><strong>给普通程序套一层外壳</strong></p>
+                  <p>写一个几十行的脚本，把 MCP 协议翻译成你的命令行参数。下面是个可运行的完整模板：</p>
+                  <pre class="mcp-code">import json, subprocess, sys
+
+TOOLS = [{
+    "name": "exam_upload",
+    "description": "上传考试结果到服务器",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "file": {"type": "string", "description": "本地文件路径"},
+            "force": {"type": "boolean", "description": "强制覆盖"}
+        },
+        "required": ["file"]
+    }
+}]
+
+def handle(req):
+    method = req.get("method")
+    if method == "initialize":
+        return {"protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "exam", "version": "1.0"}}
+    if method == "tools/list":
+        return {"tools": TOOLS}
+    if method == "tools/call":
+        args = req["params"]["arguments"]
+        cmd = ["my_exam.exe", "-upload", args["file"]]
+        if args.get("force"):
+            cmd.append("--force")
+        out = subprocess.run(cmd, capture_output=True, text=True)
+        return {"content": [{"type": "text",
+                             "text": out.stdout or out.stderr}]}
+    return {}
+
+for line in sys.stdin:
+    req = json.loads(line)
+    if "id" not in req:
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": req["id"],
+                      "result": handle(req)}), flush=True)</pre>
+                  <p>保存为 <code>D:\mcp\exam.py</code>，把 <code>cmd = [...]</code> 那行改成你真实的命令。</p>
+                </div>
+              </div>
+              <div class="mcp-step">
+                <span class="mcp-step-num">3</span>
+                <div>
+                  <p><strong>填进下面的表单</strong></p>
+                  <p>
+                    <code>名称</code>：<code>exam</code>（随便起，工具会显示成 <code>exam__exam_upload</code>）<br />
+                    <code>命令</code>：<code>python</code><br />
+                    <code>参数</code>：<code>D:\mcp\exam.py</code>
+                  </p>
+                  <p>然后点「保存并重连」。连上后状态会显示工具数量，模型就能用了。</p>
+                </div>
+              </div>
+              <div class="mcp-step">
+                <span class="mcp-step-num">4</span>
+                <div>
+                  <p><strong>连不上怎么办</strong></p>
+                  <p>在终端里直接运行同样的命令：</p>
+                  <p><code>python D:\mcp\exam.py</code></p>
+                  <p>如果它立刻退出或报错，说明脚本本身有问题；如果它停在那里等你输入，说明正常。此时可以粘贴下面这行测试：</p>
+                  <p><code>{"jsonrpc":"2.0","id":1,"method":"tools/list"}</code></p>
+                  <p>应该回一行含工具列表的 JSON。</p>
+                </div>
+              </div>
             </div>
           </details>
-          <div class="mcp-list" id="mcp-list"></div>
           <div class="settings-actions">
             <button class="plain-button" id="mcp-add" type="button">添加服务</button>
             <button class="plain-button" id="mcp-refresh" type="button">重新连接</button>

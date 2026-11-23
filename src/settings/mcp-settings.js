@@ -8,6 +8,30 @@ export const DEFAULT_SERVER = {
   enabled: true,
 };
 
+const PRESETS = {
+  filesystem: {
+    name: "filesystem",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    env: {},
+    enabled: true,
+  },
+  fetch: {
+    name: "fetch",
+    command: "uvx",
+    args: ["mcp-server-fetch"],
+    env: {},
+    enabled: true,
+  },
+  memory: {
+    name: "memory",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-memory"],
+    env: {},
+    enabled: true,
+  },
+};
+
 function isBuiltin(server) {
   return server.name === "shell";
 }
@@ -79,6 +103,7 @@ export function initMcpSettings() {
   const saveButton = document.querySelector("#mcp-save");
   const refreshButton = document.querySelector("#mcp-refresh");
   const summary = document.querySelector("#mcp-summary");
+  const help = document.querySelector("#mcp-help");
   const errorLabel = document.querySelector("#mcp-error");
   const view = document.querySelector("#settings-view");
 
@@ -211,12 +236,33 @@ export function initMcpSettings() {
     });
     render();
   });
+
+  const presetBox = document.querySelector("#mcp-presets");
+  presetBox.addEventListener("click", (event) => {
+    const button = event.target.closest(".mcp-preset");
+    if (!button) return;
+    const key = button.dataset.preset;
+    if (key === "custom") {
+      help.open = true;
+      help.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    const preset = PRESETS[key];
+    if (!preset) return;
+    const name = servers.some((item) => item.name === preset.name)
+      ? `${preset.name}${servers.length + 1}`
+      : preset.name;
+    servers.push({ ...preset, name, args: [...preset.args], env: {} });
+    render();
+  });
   saveButton.addEventListener("click", save);
   refreshButton.addEventListener("click", refresh);
 
   new MutationObserver(() => {
     if (!view.hidden) void load();
   }).observe(view, { attributes: true, attributeFilter: ["hidden"] });
+
+  window.addEventListener("litechat:mcp-changed", () => void load());
 
   void load();
 

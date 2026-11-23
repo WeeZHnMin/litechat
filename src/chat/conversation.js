@@ -78,6 +78,10 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
       await listen("chat://tool-call", (event) => {
         if (event.payload?.streamId !== streamId) return;
         stream.showToolCall(event.payload);
+        const name = event.payload?.name;
+        if (name === "add_mcp_server" || name === "remove_mcp_server") {
+          window.dispatchEvent(new CustomEvent("litechat:mcp-changed"));
+        }
       }),
     );
     unlisten.push(
