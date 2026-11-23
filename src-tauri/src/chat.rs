@@ -6,7 +6,8 @@ use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
-const MAX_TOOL_ROUNDS: usize = 6;
+const MAX_TOOL_ROUNDS: usize = 200;
+const MAX_TOOL_CALLS: usize = 500;
 
 #[derive(Default)]
 pub struct ActiveStreams(Mutex<Vec<String>>);
@@ -51,7 +52,12 @@ struct ErrorPayload {
     message: String,
 }
 
-const SYSTEM_PROMPT: &str = "你是一个乐于助人的助手。回答简洁准确，使用 Markdown 格式。需要外部信息或执行操作时，调用提供的工具，并根据工具结果继续回答。";
+const SYSTEM_PROMPT: &str = "你是一个乐于助人的助手。回答简洁准确，使用 Markdown 格式。\n\n\
+使用工具时请遵守：\n\
+1. 先想清楚要做什么，再一次性把必要的信息收集齐，避免零散地反复试探。\n\
+2. 同一个工具、同样的参数，不要重复调用。如果结果不如预期，先分析原因再换方案。\n\
+3. 工具返回失败时，读清楚错误信息；连续两次同类失败就停下来，向用户说明情况并询问，不要靠换工具名硬试。\n\
+4. 信息足够回答问题时就立即作答，不要为了「更完整」而继续调用工具。";
 
 pub fn message_text(parts: &serde_json::Value) -> String {
     let Some(items) = parts.as_array() else {
@@ -177,7 +183,9 @@ async fn run_turn(
         })
         .collect();
 
+    app.state::<crate::permissions::Permissions>().begin_turn();
     let mut seen: Vec<String> = Vec::new();
+    let mut executed = 0usize;
     for _ in 0..MAX_TOOL_ROUNDS {
         if !is_active(&app, &stream_id) {
             return Ok(());
@@ -186,12 +194,17 @@ async fn run_turn(
         if calls.is_empty() {
             return Ok(());
         }
+        if executed + calls.len() > MAX_TOOL_CALLS {
+            return wrap_up(&app, &provider, &messages, &stream_id).await;
+        }
+        executed += calls.len();
         let signature: String = calls
             .iter()
             .map(|call| format!("{}({})", call.function.name, call.function.arguments))
             .collect::<Vec<_>>()
             .join("|");
         if seen.contains(&signature) {
+            let repeats = repeats_of(&seen, &signature);
             messages.push(ChatMessage {
                 role: "assistant".into(),
                 content: None,
@@ -201,10 +214,14 @@ async fn run_turn(
             for call in &calls {
                 messages.push(ChatMessage::tool_result(
                     call.id.clone(),
-                    "同一调用已执行过，结果见上文。请直接使用已有结果回答，不要再重复调用。".into(),
+                    "这次调用与之前完全相同，结果见上文。请直接使用已有结果，不要再重复调用。".into(),
                 ));
             }
-            break;
+            if repeats >= 2 {
+                return wrap_up(&app, &provider, &messages, &stream_id).await;
+            }
+            seen.push(signature);
+            continue;
         }
         seen.push(signature);
         messages.push(ChatMessage {
@@ -236,10 +253,21 @@ async fn run_turn(
                     error: None,
                 },
             );
-            let outcome = app
-                .state::<McpManager>()
-                .call(&app, server, tool, arguments)
-                .await;
+            let outcome = match crate::permissions::ensure_allowed(
+                &app,
+                tool,
+                server,
+                &call.function.arguments,
+            )
+            .await
+            {
+                Ok(()) => {
+                    app.state::<McpManager>()
+                        .call(&app, server, tool, arguments)
+                        .await
+                }
+                Err(message) => Err(message),
+            };
             let (output, error) = match outcome {
                 Ok(text) => (text, None),
                 Err(message) => (format!("工具执行失败：{message}"), Some(message)),
@@ -260,11 +288,27 @@ async fn run_turn(
             messages.push(ChatMessage::tool_result(call.id.clone(), truncate(&output, 20000)));
         }
     }
-    let last = stream_once(&app, &provider, &messages, &specs, &stream_id).await?;
-    if last.is_empty() {
-        return Ok(());
-    }
-    Err("工具调用轮次过多，已停止".into())
+    wrap_up(&app, &provider, &messages, &stream_id).await
+}
+
+pub fn repeats_of(seen: &[String], signature: &str) -> usize {
+    seen.iter().filter(|item| item.as_str() == signature).count()
+}
+
+async fn wrap_up(
+    app: &AppHandle,
+    provider: &ProviderConfig,
+    messages: &[ChatMessage],
+    stream_id: &str,
+) -> Result<(), String> {
+    let mut final_messages = messages.to_vec();
+    final_messages.push(ChatMessage::text(
+        "user",
+        "工具调用次数已达上限，不能再继续调用工具了。请根据已经获得的信息直接给出最终答复；\
+         如果任务尚未完成，请说明已完成的部分、还差什么，以及建议用户下一步怎么做。",
+    ));
+    stream_once(app, provider, &final_messages, &[], stream_id).await?;
+    Ok(())
 }
 
 pub fn truncate(text: &str, limit: usize) -> String {
@@ -375,6 +419,14 @@ mod tests {
         .unwrap();
         assert_eq!(error["streamId"], "abc");
         assert_eq!(error["message"], "boom");
+    }
+
+    #[test]
+    fn counts_repeated_calls() {
+        let seen = vec!["a(1)".to_string(), "b(2)".to_string(), "a(1)".to_string()];
+        assert_eq!(repeats_of(&seen, "a(1)"), 2);
+        assert_eq!(repeats_of(&seen, "b(2)"), 1);
+        assert_eq!(repeats_of(&seen, "c(3)"), 0);
     }
 
     #[test]

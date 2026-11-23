@@ -5,6 +5,8 @@ import "./styles/styles.css";
 import "./styles/messages.css";
 import { invoke } from "@tauri-apps/api/core";
 import { appendMessage, clearConversation, createAssistantStream } from "./chat/chat";
+import { initApprovalDialog } from "./chat/approval-dialog";
+import { initPermissionToggle } from "./chat/permission-toggle";
 import { initComposer } from "./chat/composer";
 import { installGlobalContextMenuGuard } from "./ui/context-menu";
 import { createConversationRunner } from "./chat/conversation";
@@ -60,6 +62,8 @@ modelSettings = initModelSettings({
 });
 initMcpSettings();
 initWorkspaceSettings();
+initApprovalDialog();
+initPermissionToggle();
 
 document.addEventListener("keydown", (event) => manager.handleKeyDown(event), true);
 

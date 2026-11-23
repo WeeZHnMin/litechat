@@ -330,6 +330,7 @@ impl McpManager {
         all
     }
 
+    #[cfg(test)]
     pub fn is_builtin_tool(&self, tool: &str) -> bool {
         builtin::tool_names().contains(&tool) || files::tool_names().contains(&tool)
     }

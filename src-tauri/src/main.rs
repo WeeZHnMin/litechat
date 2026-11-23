@@ -4,6 +4,7 @@ mod chat;
 mod mcp;
 mod models;
 mod paths;
+mod permissions;
 mod providers;
 mod shortcuts;
 mod storage;
@@ -28,6 +29,7 @@ fn main() {
             app.manage(models::ModelSettings::load(app.handle()));
             app.manage(chat::ActiveStreams::default());
             app.manage(mcp::McpManager::new(paths::workspace(app.handle())));
+            app.manage(permissions::Permissions::default());
             mcp::commands::initialize(app.handle());
             shortcuts::register(app.handle())?;
             tray::setup(app)?;
@@ -60,7 +62,11 @@ fn main() {
             mcp::commands::save_mcp_servers,
             mcp::commands::refresh_mcp,
             mcp::commands::get_workspace,
-            mcp::commands::set_workspace
+            mcp::commands::set_workspace,
+            permissions::respond_approval,
+            permissions::get_permission_state,
+            permissions::set_approval_mode,
+            permissions::reset_tool_permission
         ])
         .run(tauri::generate_context!())
         .expect("error while running LiteChat");

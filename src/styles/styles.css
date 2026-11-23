@@ -365,6 +365,10 @@ button {
   color: #c25050;
 }
 
+.field-hint.is-warning {
+  color: #b8863b;
+}
+
 .path-hint {
   margin: 0 0 4px !important;
   overflow: hidden;
@@ -935,7 +939,6 @@ button {
 }
 
 .thinking-toggle {
-  margin-left: auto;
   padding: 4px 10px;
   border: 1px solid #e3e3e3;
   border-radius: 7px;
@@ -957,8 +960,26 @@ button {
   background: #eef3fa;
 }
 
-.stop-button {
+.permission-toggle {
   margin-left: 6px;
+}
+
+.composer-toolbar {
+  gap: 6px;
+}
+
+.plus-button {
+  margin-left: 0;
+}
+
+.permission-toggle.is-open-mode {
+  border-color: #c08a3e;
+  color: #a06f28;
+  background: #fdf6e8;
+}
+
+.stop-button {
+  margin-left: auto;
   padding: 4px 10px;
   border: 1px solid #ddd;
   border-radius: 7px;
@@ -1084,6 +1105,7 @@ button {
   .thinking-toggle { border-color: #3b3c3c; color: #777; }
   .thinking-toggle:hover { border-color: #666; color: #bbb; }
   .thinking-toggle[aria-pressed="true"] { border-color: #4a6fa5; color: #9dc0ea; background: #1b2634; }
+  .permission-toggle.is-open-mode { border-color: #8a6a30; color: #d9b06a; background: #2a2013; }
   .settings-actions .settings-error.is-success { color: #6fbd8b !important; }
   .primary-button { color: #191919; background: #f1f1f1; }
   .primary-button:hover { background: #d8d8d8; }

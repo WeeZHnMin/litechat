@@ -7,3 +7,15 @@ src-tauri/gen/
 *.local
 .DS_Store
 *.log
+
+# 模型调试时产生的临时文件
+mcp-write-test*.txt
+test-permission.txt
+demo_stats.py
+test-config.yaml
+test-data.csv
+test-notes.md
+test-page.html
+test-script.js
+test-script.py
+test_write.txt

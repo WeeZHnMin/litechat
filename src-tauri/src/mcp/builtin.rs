@@ -150,6 +150,7 @@ pub fn list_tools_tool() -> &'static str {
 pub const ADD_SERVER_TOOL: &str = "add_mcp_server";
 pub const REMOVE_SERVER_TOOL: &str = "remove_mcp_server";
 
+#[cfg(test)]
 pub fn tool_names() -> Vec<&'static str> {
     vec![
         "run_command",
