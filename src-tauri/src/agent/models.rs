@@ -85,7 +85,7 @@ impl From<&ModelConfig> for ModelConfigView {
 pub struct ModelSettings(Mutex<ModelConfig>);
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    crate::paths::config_dir(app).map(|path| path.join("models.json"))
+    crate::app::paths::config_dir(app).map(|path| path.join("models.json"))
 }
 
 fn validate(config: &ModelConfig) -> Result<(), String> {

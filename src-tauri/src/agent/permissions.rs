@@ -51,21 +51,71 @@ pub(crate) struct Inner {
     pending: Option<(String, tokio::sync::oneshot::Sender<bool>)>,
 }
 
-pub struct Permissions(Mutex<Inner>);
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct StoredPrefs {
+    mode: ApprovalMode,
+    #[serde(default)]
+    always_allowed: Vec<String>,
+}
 
-impl Default for Permissions {
-    fn default() -> Self {
-        Self(Mutex::new(Inner {
-            mode: ApprovalMode::Ask,
-            always_allowed: HashSet::new(),
-            session_allowed: HashSet::new(),
-            pending: None,
-        }))
+pub struct Permissions {
+    inner: Mutex<Inner>,
+    path: std::path::PathBuf,
+}
+
+impl Permissions {
+    pub fn load(app: &AppHandle) -> Self {
+        let path = crate::app::paths::config_dir(app)
+            .map(|dir| dir.join("permissions.json"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("permissions.json"));
+        let stored = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<StoredPrefs>(&bytes).ok())
+            .unwrap_or_default();
+        Self {
+            inner: Mutex::new(Inner {
+                mode: stored.mode,
+                always_allowed: stored.always_allowed.into_iter().collect(),
+                session_allowed: HashSet::new(),
+                pending: None,
+            }),
+            path,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn in_memory() -> Self {
+        Self {
+            inner: Mutex::new(Inner {
+                mode: ApprovalMode::default(),
+                always_allowed: HashSet::new(),
+                session_allowed: HashSet::new(),
+                pending: None,
+            }),
+            path: std::env::temp_dir().join("litechat-permissions-test.json"),
+        }
+    }
+
+    fn save(&self) {
+        let prefs = match self.inner.lock() {
+            Ok(inner) => StoredPrefs {
+                mode: inner.mode,
+                always_allowed: inner.always_allowed.iter().cloned().collect(),
+            },
+            Err(_) => return,
+        };
+        if let Some(directory) = self.path.parent() {
+            let _ = std::fs::create_dir_all(directory);
+        }
+        if let Ok(bytes) = serde_json::to_vec_pretty(&prefs) {
+            let _ = std::fs::write(&self.path, bytes);
+        }
     }
 }
 
 fn is_read_only(tool: &str, server: &str) -> bool {
-    if server == crate::mcp::BUILTIN_SERVER {
+    if server == crate::tools::mcp::BUILTIN_SERVER {
         if READ_ONLY_TOOLS.contains(&tool) {
             return true;
         }
@@ -103,7 +153,7 @@ pub enum Decision {
 
 impl Permissions {
     pub fn state(&self) -> PermissionState {
-        let inner = self.0.lock().ok();
+        let inner = self.inner.lock().ok();
         let (mode, always) = inner
             .as_ref()
             .map(|guard| (guard.mode, guard.always_allowed.iter().cloned().collect()))
@@ -115,7 +165,7 @@ impl Permissions {
     }
 
     pub fn set_mode(&self, mode: ApprovalMode) {
-        if let Ok(mut inner) = self.0.lock() {
+        if let Ok(mut inner) = self.inner.lock() {
             inner.mode = mode;
             if mode != ApprovalMode::Always {
                 inner.always_allowed.clear();
@@ -124,36 +174,39 @@ impl Permissions {
                 inner.session_allowed.clear();
             }
         }
+        self.save();
     }
 
     pub fn forget(&self, tool: &str) {
-        if let Ok(mut inner) = self.0.lock() {
+        if let Ok(mut inner) = self.inner.lock() {
             inner.always_allowed.remove(tool);
             inner.session_allowed.remove(tool);
         }
+        self.save();
     }
 
     pub fn allow_always(&self, tool: &str) {
-        if let Ok(mut inner) = self.0.lock() {
+        if let Ok(mut inner) = self.inner.lock() {
             inner.always_allowed.insert(tool.to_string());
         }
+        self.save();
     }
 
     fn needs_approval(&self, tool: &str, server: &str) -> bool {
-        let Ok(inner) = self.0.lock() else {
+        let Ok(inner) = self.inner.lock() else {
             return true;
         };
         decide(&inner, tool, server) == Decision::Ask
     }
 
     fn allow_session(&self, tool: &str) {
-        if let Ok(mut inner) = self.0.lock() {
+        if let Ok(mut inner) = self.inner.lock() {
             inner.session_allowed.insert(tool.to_string());
         }
     }
 
     fn clear_pending(&self, id: &str) {
-        if let Ok(mut inner) = self.0.lock() {
+        if let Ok(mut inner) = self.inner.lock() {
             if inner.pending.as_ref().map(|(pid, _)| pid == id).unwrap_or(false) {
                 inner.pending = None;
             }
@@ -175,7 +228,7 @@ pub async fn ensure_allowed(
     let id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = tokio::sync::oneshot::channel();
     {
-        let mut inner = state.0.lock().map_err(|error| error.to_string())?;
+        let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
         if let Some((stale_id, stale)) = inner.pending.take() {
             eprintln!("[permission] 丢弃过期的确认请求: {stale_id}");
             let _ = stale.send(false);
@@ -219,7 +272,7 @@ pub fn respond_approval(
 ) -> Result<(), String> {
     let state = app.state::<Permissions>();
     {
-        let mut inner = state.0.lock().map_err(|error| error.to_string())?;
+        let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
         let Some((pending_id, sender)) = inner.pending.take() else {
             return Err("没有待确认的请求".into());
         };
@@ -241,7 +294,7 @@ pub fn respond_approval(
 
 impl Permissions {
     pub fn begin_turn(&self) {
-        if let Ok(mut inner) = self.0.lock() {
+        if let Ok(mut inner) = self.inner.lock() {
             if let Some((_, sender)) = inner.pending.take() {
                 let _ = sender.send(false);
             }
@@ -284,7 +337,7 @@ mod tests {
 
     #[test]
     fn always_mode_allows_everything() {
-        let permissions = Permissions::default();
+        let permissions = Permissions::in_memory();
         assert!(permissions.needs_approval("write_file", "shell"));
         permissions.set_mode(ApprovalMode::Always);
         assert!(!permissions.needs_approval("write_file", "shell"));
@@ -293,7 +346,7 @@ mod tests {
 
     #[test]
     fn session_mode_remembers_approved_tools() {
-        let permissions = Permissions::default();
+        let permissions = Permissions::in_memory();
         permissions.set_mode(ApprovalMode::Session);
         assert!(permissions.needs_approval("run_command", "shell"));
         permissions.allow_session("run_command");
@@ -303,7 +356,7 @@ mod tests {
 
     #[test]
     fn ask_mode_honors_always_allowed_list() {
-        let permissions = Permissions::default();
+        let permissions = Permissions::in_memory();
         assert!(permissions.needs_approval("write_file", "shell"));
         permissions.allow_always("write_file");
         assert!(!permissions.needs_approval("write_file", "shell"));
@@ -320,8 +373,28 @@ mod tests {
     }
 
     #[test]
+    fn prefs_survive_serialization() {
+        let prefs = StoredPrefs {
+            mode: ApprovalMode::Always,
+            always_allowed: vec!["write_file".into()],
+        };
+        let bytes = serde_json::to_vec(&prefs).unwrap();
+        let restored: StoredPrefs = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored.mode, ApprovalMode::Always);
+        assert_eq!(restored.always_allowed, vec!["write_file".to_string()]);
+    }
+
+    #[test]
+    fn missing_or_corrupt_prefs_fall_back_to_ask() {
+        let default = StoredPrefs::default();
+        assert_eq!(default.mode, ApprovalMode::Ask);
+        assert!(default.always_allowed.is_empty());
+        assert!(serde_json::from_slice::<StoredPrefs>(b"not json").is_err());
+    }
+
+    #[test]
     fn session_allow_is_per_tool() {
-        let permissions = Permissions::default();
+        let permissions = Permissions::in_memory();
         permissions.set_mode(ApprovalMode::Session);
         permissions.allow_session("write_file");
         assert!(!permissions.needs_approval("write_file", "shell"));
@@ -378,7 +451,7 @@ mod tests {
 
     #[test]
     fn switching_mode_clears_other_scope() {
-        let permissions = Permissions::default();
+        let permissions = Permissions::in_memory();
         permissions.set_mode(ApprovalMode::Session);
         permissions.allow_session("run_command");
         permissions.set_mode(ApprovalMode::Ask);

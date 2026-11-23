@@ -32,7 +32,7 @@ fn timestamp() -> i64 {
 }
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
-    crate::paths::config_dir(app).map(|path| path.join("history.db"))
+    crate::app::paths::config_dir(app).map(|path| path.join("history.db"))
 }
 
 impl Storage {

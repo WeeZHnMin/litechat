@@ -1,4 +1,4 @@
-use crate::window::{main_window, show_main_window, toggle_main_window};
+use crate::app::window::{main_window, show_main_window, toggle_main_window};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -58,7 +58,7 @@ impl Default for ShortcutSettings {
 }
 
 fn shortcuts_path(app: &AppHandle) -> Result<PathBuf, String> {
-    crate::paths::config_dir(app).map(|path| path.join("shortcuts.json"))
+    crate::app::paths::config_dir(app).map(|path| path.join("shortcuts.json"))
 }
 
 fn load_shortcuts(app: &AppHandle) -> ShortcutConfig {

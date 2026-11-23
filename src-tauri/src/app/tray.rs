@@ -1,4 +1,4 @@
-use crate::window::{main_window, show_main_window, toggle_main_window};
+use crate::app::window::{main_window, show_main_window, toggle_main_window};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::App;

@@ -1,10 +1,10 @@
-use crate::mcp::{McpManager, McpServerConfig, McpServerStatus, McpToolInfo};
+use crate::tools::mcp::{McpManager, McpServerConfig, McpServerStatus, McpToolInfo};
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    crate::paths::config_dir(app).map(|path| path.join("mcp.json"))
+    crate::app::paths::config_dir(app).map(|path| path.join("mcp.json"))
 }
 
 fn save(app: &AppHandle, configs: &[McpServerConfig]) -> Result<(), String> {
@@ -24,7 +24,7 @@ fn load(app: &AppHandle) -> Vec<McpServerConfig> {
         .map(|configs| {
             configs
                 .into_iter()
-                .filter(|config| config.name != crate::mcp::BUILTIN_SERVER)
+                .filter(|config| config.name != crate::tools::mcp::BUILTIN_SERVER)
                 .collect()
         })
         .unwrap_or_default()
@@ -42,7 +42,7 @@ pub fn get_workspace(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub fn set_workspace(app: AppHandle, path: String) -> Result<String, String> {
-    let resolved = crate::paths::set_workspace(&app, &path)?;
+    let resolved = crate::app::paths::set_workspace(&app, &path)?;
     app.state::<McpManager>().set_workspace_path(resolved.clone());
     Ok(resolved.display().to_string())
 }
@@ -101,7 +101,7 @@ pub async fn install_server(
     if trimmed_name.is_empty() {
         return Err("服务名称不能为空".into());
     }
-    if trimmed_name == crate::mcp::BUILTIN_SERVER {
+    if trimmed_name == crate::tools::mcp::BUILTIN_SERVER {
         return Err("shell 是保留名称，请换一个".into());
     }
     if command.trim().is_empty() {
@@ -155,7 +155,7 @@ pub async fn install_server(
 
 pub async fn uninstall_server(app: &AppHandle, name: &str) -> Result<String, String> {
     let trimmed = name.trim();
-    if trimmed == crate::mcp::BUILTIN_SERVER {
+    if trimmed == crate::tools::mcp::BUILTIN_SERVER {
         return Err("shell 是内置服务，不能移除".into());
     }
     let mut configs = load(app);

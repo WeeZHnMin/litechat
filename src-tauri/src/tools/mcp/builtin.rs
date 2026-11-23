@@ -187,7 +187,7 @@ pub async fn call(tool: &str, arguments: &Value) -> Result<String, String> {
     }
 }
 
-pub fn describe_tools(tools: &[crate::mcp::McpToolInfo]) -> String {
+pub fn describe_tools(tools: &[crate::tools::mcp::McpToolInfo]) -> String {
     if tools.is_empty() {
         return "当前没有可调用的工具。".into();
     }
@@ -250,14 +250,14 @@ mod tests {
     #[test]
     fn describe_tools_lists_names_and_servers() {
         let tools = vec![
-            crate::mcp::McpToolInfo {
+            crate::tools::mcp::McpToolInfo {
                 server: "shell".into(),
                 name: "run_command".into(),
                 description: "执行命令".into(),
                 schema: json!({}),
                 input_schema: json!({}),
             },
-            crate::mcp::McpToolInfo {
+            crate::tools::mcp::McpToolInfo {
                 server: "files".into(),
                 name: "read_file".into(),
                 description: String::new(),
