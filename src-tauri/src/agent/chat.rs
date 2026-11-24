@@ -54,24 +54,10 @@ struct ErrorPayload {
     message: String,
 }
 
-fn store_outgoing(app: &AppHandle, conversation_id: &str, user_text: &str) -> Result<(), String> {
-    if user_text.trim().is_empty() {
-        return Ok(());
-    }
-    let storage = app.state::<Storage>();
-    storage.insert_message(
-        conversation_id.to_string(),
-        "user".into(),
-        serde_json::json!([{ "type": "text", "text": user_text }]),
-    )?;
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn send_chat(
     app: AppHandle,
     conversation_id: String,
-    text: String,
 ) -> Result<String, String> {
     let config = models::snapshot(&app)?;
     let provider = ProviderConfig {
@@ -80,11 +66,13 @@ pub async fn send_chat(
         api_key: config.api_key,
         thinking: config.thinking,
     };
-    store_outgoing(&app, &conversation_id, &text)?;
     let stored = {
         let storage = app.state::<Storage>();
         storage.messages(&conversation_id)?
     };
+    if stored.is_empty() {
+        return Err("会话里没有消息".into());
+    }
     let messages = build_messages(stored);
     let stream_id = uuid::Uuid::new_v4().to_string();
     {

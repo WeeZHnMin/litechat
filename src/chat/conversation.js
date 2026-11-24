@@ -9,11 +9,19 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
     return Boolean(window.__TAURI_INTERNALS__);
   }
 
-  async function ensureConversation(text) {
+  function summarize(message) {
+    const parts = message?.parts ?? [];
+    const text = parts.find((part) => part.type === "text")?.text ?? "";
+    const firstLine = text.trim().split("\n")[0].slice(0, 32);
+    if (firstLine) return firstLine;
+    const image = parts.find((part) => part.type === "image");
+    return image ? "图片" : "新对话";
+  }
+
+  async function ensureConversation(message) {
     const existing = getConversationId();
     if (existing) return existing;
-    const title = text.split("\n")[0].slice(0, 32) || "新对话";
-    const created = await invoke("create_conversation", { title });
+    const created = await invoke("create_conversation", { title: summarize(message) });
     history.adoptConversation(created.id);
     return created.id;
   }
@@ -23,13 +31,14 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
     onBusyChange?.(Boolean(stream), stream?.streamId ?? null);
   }
 
-  async function send(text) {
+  async function send(message) {
     if (current || !isTauri()) return;
     let conversationId;
     try {
-      conversationId = await ensureConversation(text);
+      conversationId = await ensureConversation(message);
+      await history.record(message);
     } catch (error) {
-      console.error("Unable to create conversation:", error);
+      console.error("Unable to store user message:", error);
       return;
     }
     const stream = createAssistantStream();
@@ -104,7 +113,7 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
     );
 
     try {
-      streamId = await invoke("send_chat", { conversationId, text });
+      streamId = await invoke("send_chat", { conversationId });
     } catch (error) {
       fail(String(error));
       return;

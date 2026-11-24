@@ -107,39 +107,69 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
     return true;
   }
 
-  function send() {
-    if (composer.classList.contains("is-busy")) return;
-    const text = input.value.trim();
-    const files = [...selectedFiles];
-    if (!text && !files.length) return;
-    historyIndex = -1;
-    draft = "";
+  async function fileToBase64(file) {
+    const buffer = await file.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+  async function buildParts(text, files) {
     const parts = [];
     if (text) parts.push({ type: "text", text });
     for (const file of files) {
       const url = URL.createObjectURL(file);
       objectUrls.add(url);
-      parts.push({
-        type: file.type.startsWith("image/") ? "image" : "file",
+      const isImage = file.type.startsWith("image/");
+      const part = {
+        type: isImage ? "image" : "file",
         url,
         name: file.name,
         mime: file.type,
         size: file.size,
-      });
+      };
+      if (isImage) {
+        part.data = await fileToBase64(file);
+      }
+      parts.push(part);
     }
+    return parts;
+  }
+
+  async function send() {
+    if (composer.classList.contains("is-busy")) return;
+    const text = input.value.trim();
+    const files = [...selectedFiles];
+    console.log("[send] 文件数:", files.length, files.map((f) => `${f.name}/${f.type}`));
+    if (!text && !files.length) return;
+
+    historyIndex = -1;
+    draft = "";
     if (text) {
       sentTexts.push(text);
       if (sentTexts.length > 100) sentTexts.shift();
     }
-    const message = { role: "user", parts };
-    appendMessage(message);
-    window.dispatchEvent(new CustomEvent("litechat:send", { detail: { text, files, message } }));
+
     selectedFiles = [];
     picker.value = "";
     input.value = "";
-    historyIndex = -1;
-    draft = "";
     renderAttachments();
+
+    let parts;
+    try {
+      parts = await buildParts(text, files);
+      console.log("[send] parts:", parts.map((p) => `${p.type}${p.data ? `/data:${p.data.length}` : ""}`));
+    } catch (error) {
+      console.error("[send] 构建消息失败:", error);
+      return;
+    }
+    const message = { role: "user", parts };
+    appendMessage(message);
+    window.dispatchEvent(new CustomEvent("litechat:send", { detail: { text, files, message } }));
     input.focus();
   }
 
@@ -249,7 +279,7 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
     if (event.isComposing) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      send();
+      void send();
       return;
     }
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {

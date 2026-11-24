@@ -84,9 +84,9 @@ function startNewChat() {
 }
 
 window.addEventListener("litechat:send", (event) => {
-  const { message, text } = event.detail;
+  const { message } = event.detail;
   if (window.__TAURI_INTERNALS__) {
-    if (text?.trim()) void runner.send(text);
+    void runner.send(message);
     return;
   }
   void history.record(message);

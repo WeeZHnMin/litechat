@@ -84,6 +84,17 @@ const TOOLS: &str = r#"[
     "name": "workspace_info",
     "description": "返回当前工作目录的绝对路径。文件工具的所有相对路径都基于它。",
     "inputSchema": { "type": "object", "properties": {}, "required": [] }
+  },
+  {
+    "name": "read_binary_info",
+    "description": "查看二进制或未知格式文件的基本信息：大小、修改时间、检测出的真实类型（依据文件头魔数）、以及是否像文本。用于在读取前判断文件是什么，避免把 PDF、压缩包、图片当文本读成乱码。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "相对于工作目录的路径" }
+      },
+      "required": ["path"]
+    }
   }
 ]"#;
 
@@ -99,7 +110,106 @@ pub fn tool_names() -> Vec<&'static str> {
         "list_dir",
         "search",
         "workspace_info",
+        "read_binary_info",
     ]
+}
+
+fn sniff_kind(bytes: &[u8]) -> &'static str {
+    const SIGS: [(&[u8], &str); 14] = [
+        (b"%PDF", "PDF 文档"),
+        (b"PK\x03\x04", "ZIP 或 Office 文档（docx/xlsx/pptx）"),
+        (b"\x89PNG", "PNG 图片"),
+        (b"\xFF\xD8\xFF", "JPEG 图片"),
+        (b"GIF8", "GIF 图片"),
+        (b"BM", "BMP 图片"),
+        (b"Rar!", "RAR 压缩包"),
+        (b"7z\xBC\xAF", "7z 压缩包"),
+        (b"\x1F\x8B", "GZIP 压缩包"),
+        (b"OggS", "Ogg 媒体"),
+        (b"ID3", "MP3 音频"),
+        (b"\xD0\xCF\x11\xE0", "旧版 Office 文档（doc/xls/ppt）"),
+        (b"\x7FELF", "ELF 可执行文件"),
+        (b"MZ", "Windows 可执行文件"),
+    ];
+    for (sig, name) in SIGS {
+        if bytes.starts_with(sig) {
+            return name;
+        }
+    }
+    "未识别的类型"
+}
+
+fn looks_like_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    let sample = &bytes[..bytes.len().min(4096)];
+    if sample.contains(&0) {
+        return false;
+    }
+    std::str::from_utf8(sample).is_ok()
+}
+
+fn read_binary_info(root: &Path, args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("缺少 path 参数")?;
+    let target = resolve(root, path)?;
+    let meta = std::fs::metadata(&target)
+        .map_err(|error| format!("无法读取 {path}: {error}"))?;
+    if meta.is_dir() {
+        return Err(format!("{path} 是目录，请用 list_dir"));
+    }
+
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .map(|seconds| {
+            format!(
+                "{} 秒前（unix {seconds}）",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|now| now.as_secs().saturating_sub(seconds))
+                    .unwrap_or(0)
+            )
+        })
+        .unwrap_or_else(|| "未知".into());
+
+    let mut head = vec![0u8; 16];
+    let read = {
+        use std::io::Read;
+        let mut file = std::fs::File::open(&target)
+            .map_err(|error| format!("无法打开 {path}: {error}"))?;
+        file.read(&mut head).unwrap_or(0)
+    };
+    head.truncate(read);
+
+    let is_text = {
+        use std::io::Read;
+        let mut sample = vec![0u8; 4096];
+        let read = std::fs::File::open(&target)
+            .and_then(|mut file| file.read(&mut sample))
+            .unwrap_or(0);
+        sample.truncate(read);
+        looks_like_text(&sample)
+    };
+
+    let mut lines = vec![
+        format!("路径：{path}"),
+        format!("大小：{}", format_size(meta.len())),
+        format!("修改时间：{modified}"),
+        format!("类型：{}", sniff_kind(&head)),
+        format!("可作为文本读取：{}", if is_text { "是" } else { "否" }),
+    ];
+    if !is_text {
+        lines.push(String::from(
+            "提示：该文件不能直接用 read_file 读取。若需要其中内容，请借助外部工具转换（例如 PowerShell、pdftotext 等）。",
+        ));
+    }
+    Ok(lines.join("\n"))
 }
 
 pub fn resolve(root: &Path, value: &str) -> Result<PathBuf, String> {
@@ -418,6 +528,7 @@ pub fn call(root: &Path, tool: &str, args: &Value) -> Result<String, String> {
         "list_dir" => list_dir(root, args),
         "search" => search(root, args),
         "workspace_info" => Ok(format!("当前工作目录：{}", root.display())),
+        "read_binary_info" => read_binary_info(root, args),
         other => Err(format!("未知文件工具: {other}")),
     }
 }
@@ -485,6 +596,35 @@ mod tests {
         let out = call(&root, "search", &json!({ "pattern": "target" })).unwrap();
         assert!(out.contains("src/a.rs:1"));
         assert!(!out.contains("node_modules"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sniffs_common_file_signatures() {
+        assert_eq!(sniff_kind(b"%PDF-1.7"), "PDF 文档");
+        assert_eq!(sniff_kind(b"PK\x03\x04"), "ZIP 或 Office 文档（docx/xlsx/pptx）");
+        assert_eq!(sniff_kind(b"\x89PNG\r\n"), "PNG 图片");
+        assert_eq!(sniff_kind(b"\xFF\xD8\xFF\xE0"), "JPEG 图片");
+        assert_eq!(sniff_kind(b"MZ\x90\x00"), "Windows 可执行文件");
+        assert_eq!(sniff_kind(b"hello world"), "未识别的类型");
+    }
+
+    #[test]
+    fn detects_text_vs_binary() {
+        assert!(looks_like_text(b"plain text\n"));
+        assert!(looks_like_text("中文内容".as_bytes()));
+        assert!(!looks_like_text(b"\x00\x01\x02"));
+        assert!(!looks_like_text(b"%PDF\x00\xff"));
+        assert!(looks_like_text(b""));
+    }
+
+    #[test]
+    fn read_binary_info_reports_binary_pdf() {
+        let root = temp_root("bininfo");
+        std::fs::write(root.join("a.pdf"), b"%PDF-1.7\n\x00\x01binary").unwrap();
+        let out = call(&root, "read_binary_info", &json!({ "path": "a.pdf" })).unwrap();
+        assert!(out.contains("PDF 文档"));
+        assert!(out.contains("可作为文本读取：否"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

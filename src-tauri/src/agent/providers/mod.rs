@@ -2,10 +2,29 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize)]
+#[serde(untagged)]
+pub enum Content {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Clone, Serialize)]
+pub struct ImageUrl {
+    pub url: String,
+}
+
+#[derive(Clone, Serialize)]
 pub struct ChatMessage {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<Content>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -16,7 +35,16 @@ impl ChatMessage {
     pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: role.into(),
-            content: Some(content.into()),
+            content: Some(Content::Text(content.into())),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn parts(role: impl Into<String>, parts: Vec<ContentPart>) -> Self {
+        Self {
+            role: role.into(),
+            content: Some(Content::Parts(parts)),
             tool_calls: None,
             tool_call_id: None,
         }
@@ -25,7 +53,7 @@ impl ChatMessage {
     pub fn tool_result(tool_call_id: String, content: String) -> Self {
         Self {
             role: "tool".into(),
-            content: Some(content),
+            content: Some(Content::Text(content)),
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
         }
@@ -274,6 +302,11 @@ where
     }
     if config.thinking {
         body["thinking"] = serde_json::json!({ "type": "enabled" });
+    }
+    {
+        let preview = serde_json::to_string(&body).unwrap_or_default();
+        let clipped: String = preview.chars().take(1200).collect();
+        eprintln!("[req] {clipped}");
     }
     let client = reqwest::Client::builder()
         .build()
