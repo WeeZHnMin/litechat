@@ -53,7 +53,8 @@ fn main() {
             agent::permissions::respond_approval,
             agent::permissions::get_permission_state,
             agent::permissions::set_approval_mode,
-            agent::permissions::reset_tool_permission
+            agent::permissions::reset_tool_permission,
+            app::clipboard::capture_with_snipping_tool
         ])
         .run(tauri::generate_context!())
         .expect("error while running LiteChat");

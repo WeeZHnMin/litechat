@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { closeContextMenu, showContextMenu } from "../ui/context-menu";
+import { captureWithSnippingTool } from "./clipboard-image";
 
 
 export function initComposer({ appendMessage, onStop, onThinkingChange }) {
@@ -129,6 +130,15 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
     input.focus();
   }
 
+  async function takeScreenshot() {
+    try {
+      const file = await captureWithSnippingTool();
+      if (file) addFiles([file]);
+    } catch {
+      // 取消或失败时静默处理
+    }
+  }
+
   function openMenu() {
     const rect = attachButton.getBoundingClientRect();
     attachButton.setAttribute("aria-expanded", "true");
@@ -149,12 +159,11 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
       },
       { separator: true },
       {
-        label: "截图（即将支持）",
-        disabled: true,
-      },
-      {
-        label: "从剪贴板粘贴图片（即将支持）",
-        disabled: true,
+        label: "截图",
+        action: () => {
+          attachButton.setAttribute("aria-expanded", "false");
+          void takeScreenshot();
+        },
       },
     ], { placement: "above" });
     window.addEventListener(
