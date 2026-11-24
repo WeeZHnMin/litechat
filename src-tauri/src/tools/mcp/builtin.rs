@@ -70,6 +70,25 @@ pub fn tools() -> Value {
     serde_json::from_str(TOOLS).unwrap_or_else(|_| json!([]))
 }
 
+/// PowerShell 在 stderr 被重定向时会输出 CLIXML 进度记录，过滤掉避免污染结果。
+fn strip_clixml(text: &str) -> String {
+    if !text.contains("<Objs Version=") {
+        return text.to_string();
+    }
+    let mut kept = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("#< CLIXML") {
+            continue;
+        }
+        if trimmed.contains("<Objs Version=") {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n")
+}
+
 fn truncate(text: String) -> String {
     if text.chars().count() <= MAX_OUTPUT {
         return text;
@@ -124,6 +143,7 @@ async fn run(program: &str, args: &[&str], cwd: Option<&str>) -> Result<String, 
     .map_err(|error| format!("等待进程失败: {error}"))?;
     let stdout = out_task.await.unwrap_or_default();
     let stderr = err_task.await.unwrap_or_default();
+    let stderr = strip_clixml(&stderr);
     let code = status.code().unwrap_or(-1);
     let mut output = String::new();
     if !stdout.trim().is_empty() {
@@ -161,6 +181,17 @@ pub fn tool_names() -> Vec<&'static str> {
     ]
 }
 
+/// PowerShell 的 -Command 参数经 Windows 命令行传递时会按系统 ANSI 代码页
+/// 编码，中文和嵌套引号会损坏。改用 -EncodedCommand（UTF-16LE + base64）绕开。
+fn encode_powershell(script: &str) -> String {
+    use base64::Engine;
+    let bytes: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
 pub async fn call(tool: &str, arguments: &Value) -> Result<String, String> {
     if tool == list_tools_tool() {
         return Ok(String::new());
@@ -175,9 +206,16 @@ pub async fn call(tool: &str, arguments: &Value) -> Result<String, String> {
     match tool {
         "run_command" => {
             let cwd = arguments.get("cwd").and_then(Value::as_str);
+            let script = format!(
+                "$ProgressPreference = 'SilentlyContinue'\n\
+                 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n\
+                 $OutputEncoding = [System.Text.Encoding]::UTF8\n\
+                 {command}"
+            );
+            let encoded = encode_powershell(&script);
             run(
                 "powershell",
-                &["-NoProfile", "-NonInteractive", "-Command", command],
+                &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded],
                 cwd,
             )
             .await
@@ -209,6 +247,52 @@ pub fn describe_tools(tools: &[crate::tools::mcp::McpToolInfo]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_command_is_utf16le_base64() {
+        use base64::Engine;
+        let encoded = encode_powershell("hi");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_bytes())
+            .expect("合法 base64");
+        assert_eq!(bytes, vec![b'h', 0, b'i', 0]);
+        let decoded = String::from_utf16(
+            &bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(decoded, "hi");
+    }
+
+    #[test]
+    fn encoded_command_preserves_chinese_and_quotes() {
+        use base64::Engine;
+        let script = "Write-Output \"中文 $(Get-Location)\"";
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encode_powershell(script).as_bytes())
+            .unwrap();
+        let decoded = String::from_utf16(
+            &bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(decoded, script);
+    }
+
+    #[test]
+    fn clixml_noise_is_stripped() {
+        let noisy = "#< CLIXML\n<Objs Version=\"1.1.0.1\" xmlns=\"http://schemas.microsoft.com/powershell/2004/04\"><Obj S=\"progress\"><AV>正在准备首次使用模块。</AV></Obj></Objs>\n真正的内容";
+        assert_eq!(strip_clixml(noisy), "真正的内容");
+    }
+
+    #[test]
+    fn plain_stderr_passes_through() {
+        assert_eq!(strip_clixml("error: something failed"), "error: something failed");
+    }
 
     #[test]
     fn exposes_expected_tools() {

@@ -56,16 +56,10 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
       if (settled) return;
       settled = true;
       cleanup();
-      const output = stream.done(options);
-      const thoughts = stream.reasoning.trim();
-      const seconds = stream.reasoningSeconds;
-      const tools = stream.toolCalls.map((block) => ({ ...block.record }));
+      stream.done(options);
+      const parts = stream.parts;
       setBusy(null);
-      if (!output.trim() && !thoughts && !tools.length) return;
-      const parts = [];
-      if (thoughts) parts.push({ type: "reasoning", text: thoughts, seconds });
-      for (const tool of tools) parts.push({ type: "tool", ...tool });
-      if (output.trim()) parts.push({ type: "markdown", text: output });
+      if (!parts.length) return;
       void history.record({ role: "assistant", parts });
     };
 

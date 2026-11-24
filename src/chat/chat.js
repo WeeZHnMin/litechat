@@ -84,19 +84,11 @@ function createToolBlock() {
   };
 }
 
-function answerAnchor(content) {
-  const body = content.querySelector(".markdown-body");
-  if (!body) return content;
-  const block = [...body.children].find((child) => !child.classList.contains("reasoning-block"));
-  return block ?? body;
-}
-
-function scrollToAnswerStart(content) {
+function scrollToAnchor(element) {
   requestAnimationFrame(() => {
     const conversation = getConversation();
-    const anchor = answerAnchor(content);
     const delta =
-      anchor.getBoundingClientRect().top - conversation.getBoundingClientRect().top;
+      element.getBoundingClientRect().top - conversation.getBoundingClientRect().top;
     const target = Math.max(0, conversation.scrollTop + delta - 24);
     conversation.scrollTo({ top: target, behavior: "smooth" });
   });
@@ -161,7 +153,21 @@ export function appendMessage(message, { onResend } = {}) {
   element.className = `message message--${role}`;
   const content = document.createElement("div");
   content.className = "message-content";
+  let tools = null;
   for (const part of normalizeParts(message)) {
+    if (part.type === "tool") {
+      if (!tools) {
+        tools = [];
+        content.append(tools);
+      }
+      const block = createToolBlock();
+      block.describe(part.server || "mcp", part.name || "tool");
+      block.setArguments(part.arguments);
+      block.setResult(part.result, part.error);
+      tools.push(block.element);
+      continue;
+    }
+    tools = null;
     const rendered = renderPart(part, role);
     if (rendered) content.append(rendered);
   }
@@ -178,8 +184,6 @@ export function appendMessage(message, { onResend } = {}) {
 }
 
 export function createAssistantStream() {
-  let text = "";
-  let reasoning = "";
   let timer = 0;
   let frame = 0;
   let lastRenderAt = 0;
@@ -187,28 +191,81 @@ export function createAssistantStream() {
   const MIN_RENDER_INTERVAL = 50;
   const { element, content } = appendMessage({ role: "assistant", parts: [] });
   element.classList.add("is-streaming");
-  let reasoningBlock = null;
-  let reasoningStartedAt = 0;
-  const toolBlocks = new Map();
-  let toolSeq = 0;
+
+  const timeline = [];
+  const toolSeq = { value: 0 };
+  const toolIndex = new Map();
+  let reasoningEntry = null;
+  let textEntry = null;
+
+  function newTextEntry() {
+    const markdown = document.createElement("div");
+    markdown.className = "markdown-body";
+    content.append(markdown);
+    const entry = { kind: "text", element: markdown, text: "" };
+    timeline.push(entry);
+    return entry;
+  }
+
+  function reasoningChunk(chunk) {
+    if (!reasoningEntry) {
+      const block = createReasoningBlock();
+      content.append(block.element);
+      reasoningEntry = {
+        kind: "reasoning",
+        element: block.element,
+        block,
+        text: "",
+        startedAt: performance.now(),
+        seconds: null,
+      };
+      timeline.push(reasoningEntry);
+    }
+    reasoningEntry.text += chunk;
+    reasoningEntry.block.setText(reasoningEntry.text);
+    if (!frame) {
+      const stick = shouldStickToBottom();
+      if (stick) scrollToBottom("auto");
+    }
+  }
+
+  function textChunk(chunk) {
+    if (!textEntry) textEntry = newTextEntry();
+    textEntry.text += chunk;
+    queueRender();
+  }
+
+  function closeReasoning() {
+    if (!reasoningEntry || reasoningEntry.seconds !== null) return;
+    reasoningEntry.seconds = reasoningEntry.startedAt
+      ? Math.max(1, Math.round((performance.now() - reasoningEntry.startedAt) / 1000))
+      : null;
+    reasoningEntry.block.finish(reasoningEntry.seconds);
+  }
 
   function rememberToolCall(payload) {
-    const key = payload.id || `tool_${toolSeq++}`;
-    const existing = toolBlocks.get(key);
+    const key = payload.id || `tool_${toolSeq.value++}`;
+    const existing = toolIndex.get(key);
     if (existing) {
       existing.setResult(payload.result, payload.error);
+      if (!frame) {
+        const stick = shouldStickToBottom();
+        if (stick) scrollToBottom("auto");
+      }
       return;
     }
+    closeReasoning();
+    reasoningEntry = null;
+    textEntry = null;
+
     const block = createToolBlock();
     block.describe(payload.server, payload.name);
     block.setArguments(payload.arguments);
     if (payload.phase === "done") block.setResult(payload.result, payload.error);
-    toolBlocks.set(key, block);
-    if (content.querySelector(".markdown-body")) {
-      content.append(block.element);
-    } else {
-      render(false);
-    }
+    content.append(block.element);
+    timeline.push({ kind: "tool", element: block.element, record: block.record });
+    toolIndex.set(key, block);
+
     if (!frame) {
       const stick = shouldStickToBottom();
       if (stick) scrollToBottom("auto");
@@ -217,9 +274,7 @@ export function createAssistantStream() {
 
   const render = (enhance) => {
     const stick = shouldStickToBottom();
-    content.replaceChildren(renderMarkdown(text, { enhance }));
-    if (reasoningBlock) content.prepend(reasoningBlock.element);
-    for (const block of toolBlocks.values()) content.append(block.element);
+    if (textEntry) textEntry.element.replaceChildren(renderMarkdown(textEntry.text, { enhance }));
     if (stick) scrollToBottom("auto");
   };
 
@@ -255,62 +310,78 @@ export function createAssistantStream() {
     }
   };
 
+  const answerText = () =>
+    timeline
+      .filter((entry) => entry.kind === "text")
+      .map((entry) => entry.text)
+      .join("");
+  const allReasoning = () =>
+    timeline
+      .filter((entry) => entry.kind === "reasoning")
+      .map((entry) => entry.text)
+      .join("");
+  const allTools = () => timeline.filter((entry) => entry.kind === "tool");
+
   return {
     element,
     push(chunk) {
       if (finished) return;
-      text += chunk;
-      queueRender();
+      textChunk(chunk);
     },
     pushReasoning(chunk) {
       if (finished) return;
-      if (!reasoningBlock) {
-        reasoningBlock = createReasoningBlock();
-        reasoningStartedAt = performance.now();
-        content.prepend(reasoningBlock.element);
-      }
-      reasoning += chunk;
-      reasoningBlock.setText(reasoning);
-      if (!frame) {
-        const stick = shouldStickToBottom();
-        if (stick) scrollToBottom("auto");
-      }
+      reasoningChunk(chunk);
     },
     get isFinished() {
       return finished;
     },
     get text() {
-      return text;
+      return answerText();
     },
     get reasoning() {
-      return reasoning;
+      return allReasoning();
     },
     showToolCall(payload) {
       if (finished) return;
       rememberToolCall(payload);
     },
     get reasoningSeconds() {
-      if (!reasoningStartedAt) return null;
-      return Math.max(1, Math.round((performance.now() - reasoningStartedAt) / 1000));
+      const withSeconds = timeline
+        .filter((entry) => entry.kind === "reasoning" && entry.seconds)
+        .map((entry) => entry.seconds);
+      return withSeconds.length ? withSeconds.reduce((a, b) => a + b, 0) : null;
     },
     get toolCalls() {
-      return Array.from(toolBlocks.values());
+      return allTools().map((entry) => entry.element);
+    },
+    get parts() {
+      return timeline
+        .map((entry) => {
+          if (entry.kind === "text") {
+            return entry.text.trim()
+              ? { type: "markdown", text: entry.text }
+              : null;
+          }
+          if (entry.kind === "reasoning") {
+            return entry.text.trim()
+              ? { type: "reasoning", text: entry.text, seconds: entry.seconds }
+              : null;
+          }
+          return { type: "tool", ...entry.record };
+        })
+        .filter(Boolean);
     },
     done({ markInterrupted = false } = {}) {
-      if (finished) return text;
+      if (finished) return answerText();
       finished = true;
       cancelPending();
-      if (reasoningBlock) {
-        const seconds = reasoningStartedAt
-          ? Math.max(1, Math.round((performance.now() - reasoningStartedAt) / 1000))
-          : null;
-        reasoningBlock.finish(seconds);
-      }
+      closeReasoning();
       render(true);
       element.classList.remove("is-streaming");
       if (markInterrupted) element.classList.add("message--interrupted");
-      scrollToAnswerStart(content);
-      return text;
+      const firstText = timeline.find((entry) => entry.kind === "text");
+      scrollToAnchor(firstText?.element ?? content);
+      return answerText();
     },
     fail(error) {
       finished = true;
