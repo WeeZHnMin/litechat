@@ -122,18 +122,19 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
     const parts = [];
     if (text) parts.push({ type: "text", text });
     for (const file of files) {
-      const url = URL.createObjectURL(file);
-      objectUrls.add(url);
       const isImage = file.type.startsWith("image/");
       const part = {
         type: isImage ? "image" : "file",
-        url,
         name: file.name,
         mime: file.type,
         size: file.size,
       };
       if (isImage) {
         part.data = await fileToBase64(file);
+      } else {
+        const url = URL.createObjectURL(file);
+        objectUrls.add(url);
+        part.url = url;
       }
       parts.push(part);
     }

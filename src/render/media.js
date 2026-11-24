@@ -122,10 +122,18 @@ function blobToBase64(blob) {
   });
 }
 
+function partImageUrl(part) {
+  const mime = part.mime || "image/png";
+  if (part.data && typeof part.data === "string") {
+    return `data:${mime};base64,${part.data}`;
+  }
+  return safeResourceUrl(part.url, true);
+}
+
 export function renderImagePart(part) {
   const figure = document.createElement("figure");
   figure.className = "generated-image";
-  const url = safeResourceUrl(part.url, true);
+  const url = partImageUrl(part);
   if (!url) {
     figure.classList.add("media-error");
     figure.textContent = part.alt || "图片无法显示";
@@ -146,7 +154,7 @@ export function renderImagePart(part) {
   const caption = document.createElement("figcaption");
   const label = document.createElement("span");
   label.textContent = part.name || part.alt || "图片";
-  caption.append(label, actionButton("保存", () => downloadResource(url, part.name || "image.png")));
+  caption.append(label);
   figure.append(preview, caption);
   return figure;
 }
@@ -174,7 +182,9 @@ export function renderFilePart(part) {
   meta.append(name, details);
   const url = safeResourceUrl(part.url, true);
   const action = actionButton("打开", () => {
-    if (new URL(url, window.location.href).origin === window.location.origin) {
+    if (!url) return;
+    const parsed = new URL(url, window.location.href);
+    if (parsed.origin === window.location.origin) {
       downloadResource(url, part.name || "download");
     } else {
       void openResource(url);
