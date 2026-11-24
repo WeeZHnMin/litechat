@@ -22,6 +22,92 @@ fn launch_snipping_tool() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn read_clipboard_image() -> Result<ClipboardImage, String> {
+    let image = read_clipboard()?;
+    Ok(ClipboardImage {
+        width: image.width(),
+        height: image.height(),
+        pixels: encode_base64(image.as_raw()),
+    })
+}
+
+/// 把前端传来的 PNG 写入系统剪贴板。
+#[tauri::command]
+pub fn copy_image_to_clipboard(png: String) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png.as_bytes())
+        .map_err(|error| format!("图片数据无效: {error}"))?;
+    let image = image::load_from_memory(&bytes)
+        .map_err(|error| format!("无法解析图片: {error}"))?
+        .to_rgba8();
+    write_clipboard(&image)
+}
+
+#[cfg(windows)]
+fn write_clipboard(image: &image::RgbaImage) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Graphics::Gdi::{BITMAPINFOHEADER, BI_RGB};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{LocalAlloc, LMEM_MOVEABLE};
+
+    const CF_DIB: u32 = 8;
+
+    let width = image.width() as i32;
+    let height = image.height() as i32;
+    if width <= 0 || height <= 0 {
+        return Err("图片尺寸无效".into());
+    }
+
+    let stride = width as usize * 4;
+    let pixel_bytes = stride * height as usize;
+    let header_size = std::mem::size_of::<BITMAPINFOHEADER>();
+    let total = header_size + pixel_bytes;
+
+    unsafe {
+        let global = LocalAlloc(LMEM_MOVEABLE, total);
+        if global.is_null() {
+            return Err("内存分配失败".into());
+        }
+        let base = global as *mut u8;
+
+        let header = base as *mut BITMAPINFOHEADER;
+        std::ptr::write_bytes(base, 0, header_size);
+        (*header).biSize = header_size as u32;
+        (*header).biWidth = width;
+        (*header).biHeight = -height;
+        (*header).biPlanes = 1;
+        (*header).biBitCount = 32;
+        (*header).biCompression = BI_RGB;
+        (*header).biSizeImage = pixel_bytes as u32;
+
+        let pixels = base.add(header_size);
+        for (index, source) in image.as_raw().chunks_exact(4).enumerate() {
+            let target = pixels.add(index * 4);
+            *target = source[2];
+            *target.add(1) = source[1];
+            *target.add(2) = source[0];
+            *target.add(3) = 255;
+        }
+
+        if OpenClipboard(std::ptr::null_mut()) == 0 {
+            LocalFree(global);
+            return Err("无法打开剪贴板".into());
+        }
+        let handle = global as *mut std::ffi::c_void;
+        let ok = EmptyClipboard() != 0 && !SetClipboardData(CF_DIB, handle).is_null();
+        CloseClipboard();
+        if !ok {
+            LocalFree(global);
+            return Err("写入剪贴板失败".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn capture_with_snipping_tool() -> Result<ClipboardImage, String> {
     let baseline = clipboard_sequence();
     launch_snipping_tool()?;

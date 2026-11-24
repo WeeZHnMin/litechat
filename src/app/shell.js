@@ -235,7 +235,7 @@ for line in sys.stdin:
       </section>
       <section class="composer" id="composer" aria-label="消息输入区">
         <div class="attachment-list" id="attachment-list" hidden></div>
-        <textarea id="message-input" rows="1" aria-label="消息" placeholder="发消息或按住空格说话..."></textarea>
+        <textarea id="message-input" rows="1" aria-label="消息" placeholder="发消息..."></textarea>
         <div class="composer-toolbar">
           <button class="icon-button plus-button" id="add-attachment" type="button" aria-label="添加附件" aria-haspopup="menu" aria-expanded="false" title="添加附件">${icon("plus")}</button>
           <button class="thinking-toggle" id="thinking-toggle" type="button" aria-pressed="false" title="开启后模型会先推理再回答">深度思考</button>

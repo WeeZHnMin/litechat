@@ -1,4 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { showContextMenu } from "../ui/context-menu";
 
 export function safeResourceUrl(value, allowImageData = false) {
   if (typeof value !== "string" || !value.trim()) return "";
@@ -68,14 +70,20 @@ export function showImagePreview(value, alt = "图片预览", name = "image.png"
   overlay.setAttribute("aria-label", alt);
   const toolbar = document.createElement("div");
   toolbar.className = "lightbox-toolbar";
-  toolbar.append(
-    actionButton("保存", () => downloadResource(url, name)),
-    actionButton("关闭", () => overlay.remove()),
-  );
+  toolbar.append(actionButton("关闭", () => overlay.remove()));
   const image = document.createElement("img");
   image.src = url;
   image.alt = alt;
   image.referrerPolicy = "no-referrer";
+
+  image.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showContextMenu(event.clientX, event.clientY, [
+      { label: "复制图片", action: () => copyImage(url) },
+    ]);
+  });
+
   overlay.append(toolbar, image);
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) overlay.remove();
@@ -86,6 +94,32 @@ export function showImagePreview(value, alt = "图片预览", name = "image.png"
   document.body.append(overlay);
   overlay.tabIndex = -1;
   overlay.focus();
+}
+
+async function copyImage(url) {
+  try {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    if (navigator.clipboard?.write && window.ClipboardItem) {
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+      return;
+    }
+    await invoke("copy_image_to_clipboard", { png: await blobToBase64(blob) });
+  } catch (error) {
+    console.error("复制图片失败:", error);
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 export function renderImagePart(part) {

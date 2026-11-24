@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { closeContextMenu, showContextMenu } from "../ui/context-menu";
 import { showImagePreview } from "../render/media";
-import { captureWithSnippingTool } from "./clipboard-image";
+import { captureWithSnippingTool, pixelsToFile } from "./clipboard-image";
 
 
 export function initComposer({ appendMessage, onStop, onThinkingChange }) {
@@ -214,6 +214,35 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
     if (historyIndex !== -1) {
       historyIndex = -1;
       draft = "";
+    }
+  });
+
+  input.addEventListener("paste", async (event) => {
+    const items = [...(event.clipboardData?.items ?? [])];
+    const files = items
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+
+    if (files.length) {
+      event.preventDefault();
+      addFiles(files.map((file, index) =>
+        file.name && file.name !== "image.png"
+          ? file
+          : new File([file], `pasted-${Date.now()}-${index}.png`, { type: file.type || "image/png" }),
+      ));
+      return;
+    }
+
+    if (!window.__TAURI_INTERNALS__) return;
+    event.preventDefault();
+    try {
+      const shot = await invoke("read_clipboard_image");
+      const file = await pixelsToFile(shot, `pasted-${Date.now()}.png`);
+      if (file) addFiles([file]);
+    } catch {
+      // 剪贴板没有图片，交回默认粘贴行为
+      document.execCommand("paste");
     }
   });
   input.addEventListener("keydown", (event) => {
