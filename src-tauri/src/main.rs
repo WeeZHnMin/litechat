@@ -4,6 +4,7 @@ mod agent;
 mod app;
 mod tools;
 
+
 fn main() {
     tauri::Builder::default()
         .manage(app::shortcuts::ShortcutSettings::default())

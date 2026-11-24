@@ -245,7 +245,6 @@ for line in sys.stdin:
       </section>
       <input id="attachment-input" type="file" multiple hidden />
       <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
-      <input id="screenshot-input" type="file" accept="image/*" hidden />
     </main>
   `;
 }

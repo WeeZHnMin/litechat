@@ -19,6 +19,7 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "charset"] }
 futures-util = "0.3"
 regex = "1"
+
 tokio = { version = "1", features = ["sync", "process", "io-util", "rt", "time"] }
 rmcp = { version = "3", default-features = false, features = [
     "client",

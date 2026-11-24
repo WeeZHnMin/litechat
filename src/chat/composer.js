@@ -1,10 +1,11 @@
+import { invoke } from "@tauri-apps/api/core";
 import { closeContextMenu, showContextMenu } from "../ui/context-menu";
+
 
 export function initComposer({ appendMessage, onStop, onThinkingChange }) {
   const input = document.querySelector("#message-input");
   const picker = document.querySelector("#attachment-input");
   const folderPicker = document.querySelector("#folder-input");
-  const screenshotPicker = document.querySelector("#screenshot-input");
   const attachButton = document.querySelector("#add-attachment");
   const stopButton = document.querySelector("#stop-generation");
   const thinkingToggle = document.querySelector("#thinking-toggle");
@@ -148,11 +149,12 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
       },
       { separator: true },
       {
-        label: "截图",
-        action: () => {
-          attachButton.setAttribute("aria-expanded", "false");
-          screenshotPicker.click();
-        },
+        label: "截图（即将支持）",
+        disabled: true,
+      },
+      {
+        label: "从剪贴板粘贴图片（即将支持）",
+        disabled: true,
       },
     ], { placement: "above" });
     window.addEventListener(
@@ -177,10 +179,6 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
   folderPicker.addEventListener("change", () => {
     addFiles(folderPicker.files);
     folderPicker.value = "";
-  });
-  screenshotPicker.addEventListener("change", () => {
-    addFiles(screenshotPicker.files);
-    screenshotPicker.value = "";
   });
   input.addEventListener("input", (event) => {
     if (event.isComposing) return;
