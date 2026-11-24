@@ -600,6 +600,41 @@
   white-space: nowrap;
 }
 
+.attachment-chip--image {
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #f0f0f0;
+}
+
+.attachment-chip--image img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+
+.attachment-chip--image button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(0 0 0 / 55%);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.attachment-chip--image button:hover {
+  background: rgb(0 0 0 / 75%);
+}
+
 .attachment-chip button {
   padding: 0;
   border: 0;

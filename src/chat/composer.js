@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { closeContextMenu, showContextMenu } from "../ui/context-menu";
+import { showImagePreview } from "../render/media";
 import { captureWithSnippingTool } from "./clipboard-image";
 
 
@@ -13,6 +14,7 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
   const list = document.querySelector("#attachment-list");
   const composer = document.querySelector("#composer");
   const objectUrls = new Set();
+  const previewUrls = new Map();
   const sentTexts = [];
   let selectedFiles = [];
   let historyIndex = -1;
@@ -23,15 +25,33 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
   observer.observe(composer);
 
   function renderAttachments() {
+    for (const url of previewUrls.values()) URL.revokeObjectURL(url);
+    previewUrls.clear();
     list.replaceChildren();
     list.hidden = !selectedFiles.length;
     composer.classList.toggle("has-attachments", Boolean(selectedFiles.length));
+
     for (const [index, file] of selectedFiles.entries()) {
       const chip = document.createElement("span");
-      chip.className = "attachment-chip";
-      const name = document.createElement("span");
-      name.textContent = file.name;
-      name.title = file.name;
+      const isImage = file.type.startsWith("image/");
+      chip.className = isImage ? "attachment-chip attachment-chip--image" : "attachment-chip";
+
+      if (isImage) {
+        const thumb = document.createElement("img");
+        const url = URL.createObjectURL(file);
+        previewUrls.set(file, url);
+        thumb.src = url;
+        thumb.alt = file.name;
+        thumb.title = file.name;
+        thumb.addEventListener("click", () => showImagePreview(url, file.name, file.name));
+        chip.append(thumb);
+      } else {
+        const name = document.createElement("span");
+        name.textContent = file.name;
+        name.title = file.name;
+        chip.append(name);
+      }
+
       const remove = document.createElement("button");
       remove.type = "button";
       remove.setAttribute("aria-label", `移除 ${file.name}`);
@@ -40,7 +60,7 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
         selectedFiles.splice(index, 1);
         renderAttachments();
       });
-      chip.append(name, remove);
+      chip.append(remove);
       list.append(chip);
     }
   }
