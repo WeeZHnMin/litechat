@@ -207,7 +207,16 @@ export function createAssistantStream() {
     return entry;
   }
 
+  function settleText() {
+    if (!textEntry) return;
+    const entry = textEntry;
+    textEntry = null;
+    cancelPending();
+    entry.element.replaceChildren(renderMarkdown(entry.text, { enhance: true }));
+  }
+
   function reasoningChunk(chunk) {
+    settleText();
     if (!reasoningEntry) {
       const block = createReasoningBlock();
       content.append(block.element);
@@ -230,6 +239,8 @@ export function createAssistantStream() {
   }
 
   function textChunk(chunk) {
+    closeReasoning();
+    reasoningEntry = null;
     if (!textEntry) textEntry = newTextEntry();
     textEntry.text += chunk;
     queueRender();
@@ -255,8 +266,8 @@ export function createAssistantStream() {
       return;
     }
     closeReasoning();
+    settleText();
     reasoningEntry = null;
-    textEntry = null;
 
     const block = createToolBlock();
     block.describe(payload.server, payload.name);
@@ -274,7 +285,11 @@ export function createAssistantStream() {
 
   const render = (enhance) => {
     const stick = shouldStickToBottom();
-    if (textEntry) textEntry.element.replaceChildren(renderMarkdown(textEntry.text, { enhance }));
+    for (const entry of timeline) {
+      if (entry.kind !== "text") continue;
+      if (!enhance && entry !== textEntry) continue;
+      entry.element.replaceChildren(renderMarkdown(entry.text, { enhance }));
+    }
     if (stick) scrollToBottom("auto");
   };
 
