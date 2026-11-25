@@ -22,6 +22,17 @@ fn launch_snipping_tool() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn clipboard_has_image() -> bool {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::DataExchange::IsClipboardFormatAvailable;
+        IsClipboardFormatAvailable(2) != 0
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+#[tauri::command]
 pub fn read_clipboard_image() -> Result<ClipboardImage, String> {
     let image = read_clipboard()?;
     Ok(ClipboardImage {

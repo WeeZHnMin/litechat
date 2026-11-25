@@ -266,15 +266,16 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
     }
 
     if (!window.__TAURI_INTERNALS__) return;
+
+    const hasImage = await invoke("clipboard_has_image").catch(() => false);
+    if (!hasImage) return;
+
     event.preventDefault();
     try {
       const shot = await invoke("read_clipboard_image");
       const file = await pixelsToFile(shot, `pasted-${Date.now()}.png`);
       if (file) addFiles([file]);
-    } catch {
-      // 剪贴板没有图片，交回默认粘贴行为
-      document.execCommand("paste");
-    }
+    } catch {}
   });
   input.addEventListener("keydown", (event) => {
     if (event.isComposing) return;
