@@ -576,6 +576,7 @@
 
 .attachment-list {
   display: flex;
+  align-items: center;
   gap: 5px;
   margin-bottom: 6px;
   overflow-x: auto;
@@ -606,6 +607,7 @@
   overflow: hidden;
   border-radius: 8px;
   background: #f0f0f0;
+  cursor: pointer;
 }
 
 .attachment-chip--image img {
@@ -613,34 +615,80 @@
   width: 56px;
   height: 56px;
   object-fit: cover;
-  cursor: zoom-in;
+  cursor: pointer;
+  transition: filter 140ms ease;
 }
 
-.attachment-chip--image button {
+.attachment-chip--image:hover img {
+  filter: brightness(0.86);
+}
+
+.attachment-chip--image > button {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: 3px;
+  right: 3px;
+  display: block;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(0 0 0 / 62%);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 30%);
+  font-size: 0;
+  cursor: pointer;
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.attachment-chip--image > button::before,
+.attachment-chip--image > button::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.attachment-chip--image > button::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.attachment-chip--image > button::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.attachment-chip--image > button:hover {
+  background: #c25050;
+  transform: scale(1.12);
+}
+
+.attachment-chip--image > button:active {
+  transform: scale(0.94);
+}
+
+.attachment-chip:not(.attachment-chip--image) button {
   display: grid;
   width: 16px;
   height: 16px;
-  place-items: center;
-  border-radius: 50%;
-  color: #fff;
-  background: rgb(0 0 0 / 55%);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.attachment-chip--image button:hover {
-  background: rgb(0 0 0 / 75%);
-}
-
-.attachment-chip button {
+  flex: 0 0 auto;
   padding: 0;
+  place-items: center;
   border: 0;
-  color: inherit;
+  border-radius: 4px;
+  color: #9a9a9a;
   background: transparent;
+  font-size: 13px;
+  line-height: 1;
   cursor: pointer;
+}
+
+.attachment-chip:not(.attachment-chip--image) button:hover {
+  color: #c25050;
+  background: rgb(128 128 128 / 14%);
 }
 
 .composer.has-attachments {
@@ -662,6 +710,9 @@
   .citation-card { border-color: #343535; color: #ddd; }
   .citation-number { color: #bbb; background: #303131; }
   .attachment-chip { color: #bbb; background: #303131; }
+  .attachment-chip--image { background: #303131; }
+  .attachment-chip--image > button { background: rgb(0 0 0 / 70%); }
+  .attachment-chip:not(.attachment-chip--image) button { color: #8a8a8a; }
   .reasoning-block > summary { color: #6f6f6f; }
   .reasoning-block > summary:hover { color: #a0a0a0; }
   .reasoning-body { border-left-color: #2e2f2f; color: #8a8a8a; }
