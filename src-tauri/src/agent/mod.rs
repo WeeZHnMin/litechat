@@ -2,6 +2,7 @@ pub mod chat;
 pub mod document;
 pub mod models;
 pub mod pdf_images;
+pub mod pdf_text;
 pub mod permissions;
 pub mod projection;
 pub mod providers;

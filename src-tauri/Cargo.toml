@@ -22,7 +22,9 @@ regex = "1"
 base64 = "0.21"
 image = { version = "0.25", default-features = false, features = ["png"] }
 calamine = "0.38"
-pdf-extract = "0.12"
+# PDF 文字提取：pdfium 对中文 PDF 的编码支持远好于 pdf-extract
+pdfium-render = "0.9"
+# PDF 内嵌图片：pdfium 不导出原始图像流，这里直接读对象树
 lopdf = "0.42"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
@@ -43,8 +45,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [profile.release]
-# 不用 panic = "abort"：pdf-extract 遇到不支持的字体编码会 panic，
-# 需要 catch_unwind 兜住，否则 release 版会直接闪退。
+# 不用 panic = "abort"：第三方解析库（如 PDF、表格）可能 panic，
+# 保留 unwind 才能让单个文件的解析失败不至于终止整个进程。
 codegen-units = 1
 lto = true
 opt-level = "s"

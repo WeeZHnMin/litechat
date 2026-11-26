@@ -28,6 +28,8 @@
 
 需要 Node 18+、Rust 工具链和 Tauri 的系统依赖。
 
+PDF 解析依赖 `src-tauri/libs/pdfium.dll`（Windows x64，约 7.6 MB），已随仓库提供，打包时会自动带上。要换其他平台时，从 [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F8125) 下载对应版本，**build 号必须与 `pdfium-render` 绑定的版本一致**（当前 8125）。
+
 ```powershell
 pnpm install
 pnpm tauri dev      # 开发
@@ -87,10 +89,10 @@ pnpm tauri build    # 打包
 | txt / md / 代码 / `.cmd` / `.bat` | 完整支持，非 UTF-8 时按系统代码页解码 |
 | Excel（xlsx / xls） | 完整支持，按工作表输出 |
 | Word（docx） | 完整支持 |
-| PDF | 仅文字层。**使用 GBK-EUC-H 等编码的中文 PDF 无法提取**，会明确报错 |
+| PDF | 文字层完整支持，含中文（GBK-EUC-H 等编码）；扫描件无文字层时会提示 |
 | PPT | 不支持，请另存为 PDF |
 
-> PDF 解析基于 `pdf-extract`，对中文 PDF 的编码支持有限。遇到报错时，可用 WPS/Edge 另存为文本，或截图后作为图片上传。
+> PDF 解析基于 PDFium（Chrome 同款引擎），中文 PDF 可正常提取。扫描版 PDF 没有文字层，需要先行 OCR 或截图后作为图片上传。
 
 ### MCP 服务
 
@@ -168,7 +170,7 @@ src-tauri/               后端
 
 ## 已知限制
 
-- **中文 PDF 提取**：`pdf-extract` 不支持 GBK-EUC-H 等编码，这类 PDF 只能报错
+- **扫描版 PDF**：没有文字层，无法提取。需要先 OCR 或截图后作为图片上传
 - **PPT**：不支持
 - **PDF 内嵌图片**：已能导出，但尚未在真实文档上充分验证
 

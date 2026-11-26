@@ -254,36 +254,15 @@ fn format_number(value: f64) -> String {
     }
 }
 
-/// 把 panic 的 payload 转成人能读的一句话。
-fn panic_reason(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(text) = payload.downcast_ref::<&str>() {
-        return (*text).to_string();
-    }
-    if let Some(text) = payload.downcast_ref::<String>() {
-        return text.clone();
-    }
-    "未知原因".into()
-}
-
 fn read_pdf(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
-    // pdf-extract 遇到不支持的字体编码（如 GBK-EUC-H）会直接 panic 而不是
-    // 返回错误。放任不管会把整个对话流带崩，所以这里必须兜住。
-    // 同时临时屏蔽 panic 消息，否则每份问题 PDF 都会往日志刷一屏堆栈。
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let outcome = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(bytes));
-    std::panic::set_hook(previous);
+    // PDFium 对中文 PDF 的编码支持完整，不需要 catch_unwind 兜底
+    let pages = crate::agent::pdf_text::extract_text(bytes)
+        .map_err(|error| format!("{name}：{error}"))?;
 
-    let text = outcome
-        .map_err(|payload| {
-            let reason = panic_reason(&payload);
-            format!("{name}：PDF 里的字体编码暂不支持（{reason}），无法提取文字")
-        })?
-        .map_err(|error| format!("{name}：PDF 解析失败（{error}）"))?;
     let mut result = Extracted::new("PDF");
-    let trimmed = text.trim();
+    let total_chars: usize = pages.iter().map(|page| page.chars().count()).sum();
 
-    if trimmed.is_empty() {
+    if pages.is_empty() || total_chars == 0 {
         // 扫描件：整页是图片，没有文字层。明确告知，而不是返回空内容
         return Ok(Extracted {
             text: String::new(),
@@ -291,12 +270,29 @@ fn read_pdf(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
                 "（这份 PDF 没有可提取的文字层，很可能是扫描件或纯图片）".into(),
                 "（暂不支持把 PDF 页面转成图片识别）".into(),
             ],
-            kind: "PDF（无文字层）".into(),
+            kind: format!("PDF（{} 页，无文字层）", pages.len()),
         });
     }
 
-    let (kept, cut) = truncate_chars(trimmed.to_string(), MAX_TEXT_CHARS);
+    // 逐页拼起来，带页码标记，方便模型引用
+    let mut joined = String::new();
+    for (index, page) in pages.iter().enumerate() {
+        let trimmed = page.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !joined.is_empty() {
+            joined.push_str("\n\n");
+        }
+        if pages.len() > 1 {
+            joined.push_str(&format!("— 第 {} 页 —\n", index + 1));
+        }
+        joined.push_str(trimmed);
+    }
+
+    let (kept, cut) = truncate_chars(joined, MAX_TEXT_CHARS);
     result.text = kept;
+    result.kind = format!("PDF，{} 页", pages.len());
     if cut {
         result
             .notes
@@ -556,13 +552,12 @@ mod tests {
 mod real_pdf_tests {
     use super::*;
 
-    /// 真实的一份带 GBK-EUC-H 字体的 PDF：pdf-extract 会 panic，
-    /// 必须被 catch_unwind 接住并转成普通错误。
+    /// 真实中文 PDF 的回归测试。用 LITECHAT_PDF_FIXTURE 指向文件后运行。
     ///
-    /// 用 LITECHAT_PDF_FIXTURE 指向一份会触发该 panic 的 PDF 才会真正执行；
-    /// 平时跳过，不依赖仓库里的二进制样本。
+    /// 这份样本使用 GBK-EUC-H 字体编码，正是旧的 pdf-extract 读不了的类型；
+    /// 换成 PDFium 后应当能正常提取出文字。
     #[test]
-    fn unsupported_font_encoding_does_not_panic() {
+    fn chinese_pdf_yields_text() {
         let Ok(path) = std::env::var("LITECHAT_PDF_FIXTURE") else {
             eprintln!("跳过：未设置 LITECHAT_PDF_FIXTURE");
             return;
@@ -572,14 +567,10 @@ mod real_pdf_tests {
             return;
         }
         let bytes = std::fs::read(&path).unwrap();
-        let outcome = extract("sample.pdf", &bytes);
-        match outcome {
-            Ok(extracted) => eprintln!("解析成功，{} 字符", extracted.text.chars().count()),
-            Err(message) => {
-                assert!(!message.is_empty());
-                eprintln!("按预期返回错误而不是崩溃：{message}");
-            }
-        }
+        let extracted = extract("sample.pdf", &bytes).expect("PDF 应当能解析");
+        let chars = extracted.text.chars().count();
+        assert!(chars > 0, "应当提取出文字，实际为空");
+        eprintln!("提取到 {chars} 字符，类型：{}", extracted.kind);
     }
 }
 
