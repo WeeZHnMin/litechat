@@ -119,6 +119,9 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
     return btoa(binary);
   }
 
+  // 单个附件上限，与后端 uploads 模块保持一致
+  const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
+
   async function buildParts(text, files) {
     const parts = [];
     if (text) parts.push({ type: "text", text });
@@ -130,9 +133,26 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
         mime: file.type,
         size: file.size,
       };
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        part.tooLarge = true;
+        part.text = `【附件：${file.name}】\n（文件 ${(file.size / 1024 / 1024).toFixed(1)} MB，超过 ${
+          MAX_ATTACHMENT_BYTES / 1024 / 1024
+        } MB 上限，未保存）`;
+        parts.push(part);
+        continue;
+      }
+      const data = await fileToBase64(file);
       if (isImage) {
-        part.data = await fileToBase64(file);
+        // 图片直接走多模态通道，模型能看图
+        part.data = data;
       } else {
+        // 文档存到工作目录，消息里只留路径；模型需要时用 read_document 读
+        try {
+          part.path = await invoke("save_attachment", { name: file.name, data });
+        } catch (error) {
+          console.error("[附件] 保存失败:", error);
+          part.uploadError = String(error);
+        }
         const url = URL.createObjectURL(file);
         objectUrls.add(url);
         part.url = url;

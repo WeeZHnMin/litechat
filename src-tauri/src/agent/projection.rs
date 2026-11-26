@@ -11,6 +11,68 @@ pub const SYSTEM_PROMPT: &str = "你是一个乐于助人的助手。回答简�
 
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
+/// 用户上传的附件：只给路径和一行摘要，不把全文塞进消息。
+/// 模型需要内容时调用 `read_document` 读取，这样长文档不会撑爆上下文。
+fn document_parts(parts: &serde_json::Value) -> Vec<String> {
+    let Some(items) = parts.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter(|part| part.get("type").and_then(|value| value.as_str()) == Some("file"))
+        .map(|part| {
+            let name = part
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("附件");
+            // 前端判定超限时已经写好了说明
+            if part.get("tooLarge").and_then(|value| value.as_bool()) == Some(true) {
+                return part
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("（附件过大，未保存）")
+                    .to_string();
+            }
+            let size = part
+                .get("size")
+                .and_then(|value| value.as_u64())
+                .map(format_size)
+                .unwrap_or_default();
+            if let Some(error) = part.get("uploadError").and_then(|value| value.as_str()) {
+                return format!("【附件：{name}】\n（保存失败，内容不可读：{error}）");
+            }
+            match part.get("path").and_then(|value| value.as_str()) {
+                Some(path) => format!(
+                    "【附件：{name}{}】\n已保存到 {path}，需要内容时用 read_document 读取。",
+                    if size.is_empty() {
+                        String::new()
+                    } else {
+                        format!("，{size}")
+                    }
+                ),
+                None => format!(
+                    "【附件：{name}】\n（这份附件没有保存到工作目录，内容不可读）"
+                ),
+            }
+        })
+        .collect()
+}
+
+fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut index = 0;
+    while value >= 1024.0 && index < UNITS.len() - 1 {
+        value /= 1024.0;
+        index += 1;
+    }
+    if index == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[index])
+    }
+}
+
 pub fn message_text(parts: &serde_json::Value) -> String {
     let Some(items) = parts.as_array() else {
         return String::new();
@@ -61,7 +123,17 @@ fn image_parts(parts: &serde_json::Value) -> Vec<ContentPart> {
 pub fn build_messages(stored: Vec<StorageMessage>) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage::text("system", SYSTEM_PROMPT)];
     for item in stored {
-        let text = message_text(&item.parts);
+        // 附件解析成文本后接在消息正文后面，模型才能真正读到内容
+        let mut text = message_text(&item.parts);
+        if item.role == "user" {
+            let documents = document_parts(&item.parts);
+            if !documents.is_empty() {
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                text.push_str(&documents.join("\n\n"));
+            }
+        }
         let images = if item.role == "user" {
             image_parts(&item.parts)
         } else {
@@ -239,5 +311,107 @@ mod tests {
             messages[1].content.as_ref().unwrap(),
             crate::agent::providers::Content::Text(_)
         ));
+    }
+
+    fn base64(data: &[u8]) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(data)
+    }
+
+    #[test]
+    fn uploaded_file_gives_path_and_hint_not_full_text() {
+        let stored = vec![StorageMessage {
+            id: "1".into(),
+            conversation_id: "c".into(),
+            role: "user".into(),
+            parts: serde_json::json!([{
+                "type": "file",
+                "name": "note.pdf",
+                "path": "uploads/note.pdf",
+                "size": 2048,
+                "data": base64("不该出现的全文".as_bytes()),
+            }]),
+            created_at: 1,
+        }];
+        let messages = build_messages(stored);
+        let content = content_text(messages[1].content.as_ref().unwrap());
+        assert!(content.contains("uploads/note.pdf"), "{content}");
+        assert!(content.contains("read_document"), "{content}");
+        assert!(content.contains("2.0 KB"), "{content}");
+        // 全文不再塞进消息，交给工具按需读取
+        assert!(!content.contains("不该出现的全文"), "{content}");
+    }
+
+    #[test]
+    fn attachment_text_is_appended_after_message_body() {
+        let stored = vec![StorageMessage {
+            id: "1".into(),
+            conversation_id: "c".into(),
+            role: "user".into(),
+            parts: serde_json::json!([
+                { "type": "text", "text": "看看这个" },
+                { "type": "file", "name": "a.pdf", "path": "uploads/a.pdf" },
+            ]),
+            created_at: 1,
+        }];
+        let messages = build_messages(stored);
+        let content = content_text(messages[1].content.as_ref().unwrap());
+        let body = content.find("看看这个").expect("正文应该在");
+        let file = content.find("【附件").expect("附件说明应该在");
+        assert!(body < file, "附件应排在正文之后：{content}");
+    }
+
+    #[test]
+    fn attachment_without_saved_path_is_reported() {
+        let stored = vec![StorageMessage {
+            id: "1".into(),
+            conversation_id: "c".into(),
+            role: "user".into(),
+            parts: serde_json::json!([{
+                "type": "file",
+                "name": "old.pdf",
+                "url": "blob:http://localhost/x",
+            }]),
+            created_at: 1,
+        }];
+        let messages = build_messages(stored);
+        let content = content_text(messages[1].content.as_ref().unwrap());
+        assert!(content.contains("没有保存"), "{content}");
+    }
+
+    #[test]
+    fn oversized_attachment_uses_frontend_note() {
+        let stored = vec![StorageMessage {
+            id: "1".into(),
+            conversation_id: "c".into(),
+            role: "user".into(),
+            parts: serde_json::json!([{
+                "type": "file",
+                "name": "big.pdf",
+                "tooLarge": true,
+                "text": "【附件：big.pdf】\n（文件 40.0 MB，超过 32 MB 上限，未保存）",
+            }]),
+            created_at: 1,
+        }];
+        let messages = build_messages(stored);
+        let content = content_text(messages[1].content.as_ref().unwrap());
+        assert!(content.contains("超过 32 MB 上限"), "{content}");
+    }
+
+    #[test]
+    fn assistant_attachments_are_not_expanded() {
+        let stored = vec![StorageMessage {
+            id: "1".into(),
+            conversation_id: "c".into(),
+            role: "assistant".into(),
+            parts: serde_json::json!([
+                { "type": "markdown", "text": "给你" },
+                { "type": "file", "name": "a.txt", "data": base64("不该出现".as_bytes()) },
+            ]),
+            created_at: 1,
+        }];
+        let messages = build_messages(stored);
+        let content = content_text(messages[1].content.as_ref().unwrap());
+        assert_eq!(content, "给你");
     }
 }

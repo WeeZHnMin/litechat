@@ -1,6 +1,7 @@
 pub mod builtin;
 pub mod commands;
 pub mod files;
+pub mod uploads;
 
 pub const BUILTIN_SERVER: &str = "shell";
 

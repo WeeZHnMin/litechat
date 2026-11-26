@@ -40,6 +40,21 @@ pub fn get_workspace(app: AppHandle) -> Result<String, String> {
     Ok(app.state::<McpManager>().workspace().display().to_string())
 }
 
+/// 保存上传的附件到工作目录的 uploads/ 下，返回相对路径。
+/// 消息里只带路径和摘要，模型需要内容时用 read_document 去读。
+#[tauri::command]
+pub fn save_attachment(app: AppHandle, name: String, data: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|error| format!("附件数据无效：{error}"))?;
+    let root = app.state::<McpManager>().workspace();
+    let path = crate::tools::mcp::uploads::save(&root, &name, &bytes)?;
+    // 只保留最近 50 个附件，避免目录无限膨胀
+    crate::tools::mcp::uploads::prune(&root, 50);
+    Ok(path)
+}
+
 #[tauri::command]
 pub fn set_workspace(app: AppHandle, path: String) -> Result<String, String> {
     let resolved = crate::app::paths::set_workspace(&app, &path)?;

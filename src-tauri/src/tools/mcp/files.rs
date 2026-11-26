@@ -95,6 +95,17 @@ const TOOLS: &str = r#"[
       },
       "required": ["path"]
     }
+  },
+  {
+    "name": "read_document",
+    "description": "读取用户上传的文档并提取其中的文字，支持 PDF、Word(docx)、Excel(xlsx/xls)，以及 txt、代码、.cmd/.bat 等文本文件。用户提到「这个文件」「附件」「文档里写了什么」时用它。扫描版 PDF 没有文字层，会明确告知。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "相对于工作目录的路径，通常是 uploads/ 下的文件" }
+      },
+      "required": ["path"]
+    }
   }
 ]"#;
 
@@ -111,8 +122,41 @@ pub fn tool_names() -> Vec<&'static str> {
         "search",
         "workspace_info",
         "read_binary_info",
+        "read_document",
     ]
 }
+
+/// 读取文档并抽取文字。体积上限比 read_file 宽松得多，
+/// 因为 PDF/Excel 本身就不小。
+fn read_document(root: &Path, args: &Value) -> Result<String, String> {
+    const MAX_DOC_BYTES: u64 = 32 * 1024 * 1024;
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("缺少 path 参数")?;
+    let target = resolve(root, path)?;
+    let meta = std::fs::metadata(&target)
+        .map_err(|error| format!("无法读取 {path}: {error}"))?;
+    if meta.is_dir() {
+        return Err(format!("{path} 是目录，请用 list_dir"));
+    }
+    if meta.len() > MAX_DOC_BYTES {
+        return Err(format!(
+            "{path} 超过 {} 上限",
+            format_size(MAX_DOC_BYTES)
+        ));
+    }
+    let bytes = std::fs::read(&target).map_err(|error| format!("无法读取 {path}: {error}"))?;
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(path);
+    match crate::agent::document::extract(name, &bytes) {
+        Ok(extracted) => Ok(extracted.render(name)),
+        Err(error) => Err(error),
+    }
+}
+
 
 fn sniff_kind(bytes: &[u8]) -> &'static str {
     const SIGS: [(&[u8], &str); 14] = [
@@ -529,6 +573,7 @@ pub fn call(root: &Path, tool: &str, args: &Value) -> Result<String, String> {
         "search" => search(root, args),
         "workspace_info" => Ok(format!("当前工作目录：{}", root.display())),
         "read_binary_info" => read_binary_info(root, args),
+        "read_document" => read_document(root, args),
         other => Err(format!("未知文件工具: {other}")),
     }
 }
@@ -637,5 +682,36 @@ mod tests {
         assert!(out.contains("3\t3"));
         assert!(!out.contains("4\t4"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_document_extracts_plain_text() {
+        let root = temp_root("doc-text");
+        call(&root, "write_file", &json!({ "path": "uploads/a.txt", "content": "文档内容" })).unwrap();
+        let out = call(&root, "read_document", &json!({ "path": "uploads/a.txt" })).unwrap();
+        assert!(out.contains("文档内容"), "{out}");
+        assert!(out.contains("a.txt"), "{out}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_document_rejects_unsupported_format() {
+        let root = temp_root("doc-bad");
+        std::fs::write(root.join("a.exe"), b"MZ\x90\x00\x00\x00").unwrap();
+        let error = call(&root, "read_document", &json!({ "path": "a.exe" })).unwrap_err();
+        assert!(error.contains("暂不支持"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_document_stays_inside_workspace() {
+        let root = temp_root("doc-escape");
+        assert!(call(&root, "read_document", &json!({ "path": "../secret.pdf" })).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_document_is_registered() {
+        assert!(tool_names().contains(&"read_document"));
     }
 }
