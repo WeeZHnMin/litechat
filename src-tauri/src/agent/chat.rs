@@ -1,6 +1,6 @@
 use crate::tools::mcp::{self, McpManager};
 use crate::agent::models;
-use crate::agent::providers::{self, ChatMessage, ProviderConfig, StreamEvent, ToolCall};
+use crate::agent::providers::{self, ChatMessage, ContentPart, ProviderConfig, StreamEvent, ToolCall};
 use crate::app::storage::Storage;
 use super::projection::build_messages;
 use super::text::truncate;
@@ -17,6 +17,48 @@ pub struct ActiveStreams(Mutex<Vec<String>>);
 /// 生成过程中用户新发的消息。按 stream_id 分组，等下一个模型请求开始时注入。
 #[derive(Default)]
 pub struct QueuedInput(Mutex<std::collections::HashMap<String, Vec<String>>>);
+
+/// 模型通过 read_media_file 请求加载的图片，下一轮会作为用户消息里的图片发送。
+#[derive(Default)]
+pub struct QueuedImages(Mutex<std::collections::HashMap<String, Vec<String>>>);
+
+impl QueuedImages {
+    fn push(&self, stream_id: &str, path: String) {
+        if let Ok(mut map) = self.0.lock() {
+            map.entry(stream_id.to_string()).or_default().push(path);
+        }
+    }
+
+    fn take(&self, stream_id: &str) -> Vec<String> {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(stream_id))
+            .unwrap_or_default()
+    }
+
+    fn drop_stream(&self, stream_id: &str) {
+        if let Ok(mut map) = self.0.lock() {
+            map.remove(stream_id);
+        }
+    }
+}
+
+/// 供文件工具把图片挂进当前流。
+/// 只持有 AppHandle 和 stream_id，都满足 Send + Sync。
+struct StreamMedia {
+    app: AppHandle,
+    stream_id: String,
+}
+
+impl crate::tools::mcp::files::MediaSink for StreamMedia {
+    fn attach_image(&self, path: &str) -> Result<(), String> {
+        self.app
+            .state::<QueuedImages>()
+            .push(&self.stream_id, path.to_string());
+        Ok(())
+    }
+}
 
 impl QueuedInput {
     fn push(&self, stream_id: &str, text: String) {
@@ -142,6 +184,7 @@ pub async fn send_chat(
             };
         }
         handle.state::<QueuedInput>().drop_stream(&id);
+        handle.state::<QueuedImages>().drop_stream(&id);
         match result {
             Ok(()) => {
                 let _ = handle.emit("chat://done", DonePayload { stream_id: id });
@@ -188,6 +231,7 @@ async fn run_turn(
         .collect();
 
     app.state::<crate::agent::permissions::Permissions>().begin_turn();
+    let images = app.state::<QueuedImages>();
     let mut seen: Vec<String> = Vec::new();
     let mut executed = 0usize;
     for _ in 0..MAX_TOOL_ROUNDS {
@@ -197,6 +241,9 @@ async fn run_turn(
         // 上一段输出已结束、工具还没跑（或刚跑完）——此时插入用户新消息，
         // 让模型在下一段思考开始前就看见它，顺序天然正确。
         drain_queued_input(&app, &stream_id, &mut messages);
+        // 模型用 read_media_file 请求的图片：作为一条用户消息补进来，
+        // 因为工具结果本身只能是文本，放不下图片。
+        attach_queued_images(&app, &images, &stream_id, &mut messages)?;
         let calls = stream_once(&app, &provider, &messages, &specs, &stream_id).await?;
         if calls.is_empty() {
             // 模型已给出最终答复。但用户可能是在这一轮进行中才发的消息，
@@ -272,8 +319,12 @@ async fn run_turn(
             .await
             {
                 Ok(()) => {
+                    let media = StreamMedia {
+                        app: app.clone(),
+                        stream_id: stream_id.clone(),
+                    };
                     app.state::<McpManager>()
-                        .call(&app, server, tool, arguments)
+                        .call_with_media(&app, server, tool, arguments, Some(&media))
                         .await
                 }
                 Err(message) => Err(message),
@@ -303,6 +354,71 @@ async fn run_turn(
 
 pub fn repeats_of(seen: &[String], signature: &str) -> usize {
     seen.iter().filter(|item| item.as_str() == signature).count()
+}
+
+/// 把模型请求加载的图片作为一条用户消息补进对话。
+///
+/// 工具结果只能是文本，所以图片没法跟着 tool 消息走；这里改用一条 user
+/// 消息携带图片，模型下一轮就能看到。图片一直留在上下文里，因此限制张数。
+fn attach_queued_images(
+    app: &AppHandle,
+    images: &QueuedImages,
+    stream_id: &str,
+    messages: &mut Vec<ChatMessage>,
+) -> Result<(), String> {
+    const MAX_IMAGES_PER_ROUND: usize = 4;
+    const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+
+    let paths = images.take(stream_id);
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let root = app.state::<McpManager>().workspace();
+
+    let mut parts = Vec::new();
+    for path in paths.iter().take(MAX_IMAGES_PER_ROUND) {
+        let target = match crate::tools::mcp::files::resolve(&root, path) {
+            Ok(target) => target,
+            Err(_) => continue,
+        };
+        let Ok(meta) = std::fs::metadata(&target) else {
+            continue;
+        };
+        if meta.len() > MAX_IMAGE_BYTES {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&target) else {
+            continue;
+        };
+        let extension = target
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("png")
+            .to_ascii_lowercase();
+        let mime = match extension.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            _ => "image/png",
+        };
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        parts.push(ContentPart::ImageUrl {
+            image_url: providers::ImageUrl {
+                url: format!("data:{mime};base64,{data}"),
+            },
+        });
+    }
+
+    if parts.is_empty() {
+        return Ok(());
+    }
+    let mut content = vec![ContentPart::Text {
+        text: "以下是刚才请求的图片内容：".into(),
+    }];
+    content.extend(parts);
+    messages.push(ChatMessage::parts("user", content));
+    Ok(())
 }
 
 /// 把用户在这一轮里插入的消息取出来，按顺序追加为用户消息。

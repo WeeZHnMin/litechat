@@ -336,6 +336,8 @@ impl McpManager {
         builtin::tool_names().contains(&tool) || files::tool_names().contains(&tool)
     }
 
+    /// 不带媒体通道的调用入口。
+    #[allow(dead_code)]
     pub async fn call(
         &self,
         app: &tauri::AppHandle,
@@ -343,8 +345,19 @@ impl McpManager {
         tool: &str,
         arguments: Value,
     ) -> Result<String, String> {
+        self.call_with_media(app, server, tool, arguments, None).await
+    }
+
+    pub async fn call_with_media(
+        &self,
+        app: &tauri::AppHandle,
+        server: &str,
+        tool: &str,
+        arguments: Value,
+        media: Option<&(dyn files::MediaSink + 'static)>,
+    ) -> Result<String, String> {
         if server == BUILTIN_SERVER {
-            return self.call_builtin(app, tool, arguments).await;
+            return self.call_builtin_with(app, tool, arguments, media).await;
         }
         let clients = self.clients.lock().await;
         let client = clients
@@ -364,11 +377,23 @@ impl McpManager {
         Ok(result_text(&result))
     }
 
+    /// 不带媒体通道的内置工具入口。
+    #[allow(dead_code)]
     pub async fn call_builtin(
         &self,
         app: &tauri::AppHandle,
         tool: &str,
         arguments: Value,
+    ) -> Result<String, String> {
+        self.call_builtin_with(app, tool, arguments, None).await
+    }
+
+    pub async fn call_builtin_with(
+        &self,
+        app: &tauri::AppHandle,
+        tool: &str,
+        arguments: Value,
+        media: Option<&(dyn files::MediaSink + 'static)>,
     ) -> Result<String, String> {
         if tool == builtin::list_tools_tool() {
             let tools = self.tools().await;
@@ -416,7 +441,7 @@ impl McpManager {
         }
         if files::tool_names().contains(&tool) {
             let root = self.workspace();
-            return files::call(&root, tool, &arguments);
+            return files::call_with(&root, tool, &arguments, media);
         }
         builtin::call(tool, &arguments, &self.workspace()).await
     }

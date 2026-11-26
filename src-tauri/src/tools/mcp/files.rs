@@ -106,6 +106,28 @@ const TOOLS: &str = r#"[
       },
       "required": ["path"]
     }
+  },
+  {
+    "name": "extract_pdf_images",
+    "description": "把 PDF 里内嵌的图片导出成独立文件，返回每张图的路径和尺寸。用户问「这份 PDF 里的图是什么」「有没有插图」「看看图表」时先用它找出图片，再用 read_media_file 加载需要看的那张。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "相对于工作目录的 PDF 路径，通常是 uploads/ 下的文件" }
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "read_media_file",
+    "description": "加载一张图片，使其真正出现在对话里供你查看内容。只用于已经存在的图片文件（例如 extract_pdf_images 导出的结果）。调用后这张图会在下一步可见，可以据此描述或分析。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "相对于工作目录的图片路径" }
+      },
+      "required": ["path"]
+    }
   }
 ]"#;
 
@@ -123,6 +145,8 @@ pub fn tool_names() -> Vec<&'static str> {
         "workspace_info",
         "read_binary_info",
         "read_document",
+        "extract_pdf_images",
+        "read_media_file",
     ]
 }
 
@@ -564,7 +588,24 @@ fn search(root: &Path, args: &Value) -> Result<String, String> {
     ))
 }
 
+/// 工具执行时能影响对话的地方（目前只有「把图片挂进下一步」）。
+/// 实现必须能跨 await 传递，因为工具调用是异步的。
+pub trait MediaSink: Send + Sync {
+    /// 把一张图片排进待发送队列，下一步会作为用户消息里的图片出现。
+    fn attach_image(&self, path: &str) -> Result<(), String>;
+}
+
+/// 不加载图片的调用（测试和不需要媒体通道的场景用）。
 pub fn call(root: &Path, tool: &str, args: &Value) -> Result<String, String> {
+    call_with(root, tool, args, None)
+}
+
+pub fn call_with(
+    root: &Path,
+    tool: &str,
+    args: &Value,
+    media: Option<&(dyn MediaSink + 'static)>,
+) -> Result<String, String> {
     match tool {
         "read_file" => read_file(root, args),
         "write_file" => write_file(root, args),
@@ -574,8 +615,81 @@ pub fn call(root: &Path, tool: &str, args: &Value) -> Result<String, String> {
         "workspace_info" => Ok(format!("当前工作目录：{}", root.display())),
         "read_binary_info" => read_binary_info(root, args),
         "read_document" => read_document(root, args),
+        "extract_pdf_images" => extract_pdf_images(root, args),
+        "read_media_file" => read_media_file(root, args, media),
         other => Err(format!("未知文件工具: {other}")),
     }
+}
+
+fn extract_pdf_images(root: &Path, args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("缺少 path 参数")?;
+    let target = resolve(root, path)?;
+    let bytes = std::fs::read(&target).map_err(|error| format!("无法读取 {path}: {error}"))?;
+    let extracted = crate::agent::pdf_images::extract(root, &target, &bytes)?;
+
+    if extracted.images.is_empty() {
+        let mut message = format!("{path} 里没有提取到图片。");
+        for note in &extracted.notes {
+            message.push('\n');
+            message.push_str(note);
+        }
+        return Ok(message);
+    }
+
+    let mut lines = vec![format!(
+        "从 {path} 导出 {} 张图片，可用 read_media_file 加载查看：",
+        extracted.images.len()
+    )];
+    for image in &extracted.images {
+        lines.push(format!("- {}", image.describe()));
+    }
+    for note in &extracted.notes {
+        lines.push(note.clone());
+    }
+    Ok(lines.join("\n"))
+}
+
+fn read_media_file(
+    root: &Path,
+    args: &Value,
+    media: Option<&(dyn MediaSink + 'static)>,
+) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("缺少 path 参数")?;
+    let target = resolve(root, path)?;
+    let meta = std::fs::metadata(&target).map_err(|error| format!("无法读取 {path}: {error}"))?;
+    if meta.is_dir() {
+        return Err(format!("{path} 是目录"));
+    }
+    let extension = target
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") {
+        return Err(format!(
+            "{path} 不是可加载的图片格式（支持 png/jpg/jpeg/gif/webp）"
+        ));
+    }
+
+    let bytes = std::fs::read(&target).map_err(|error| format!("无法读取 {path}: {error}"))?;
+    use image::GenericImageView;
+    let (width, height) = image::load_from_memory(&bytes)
+        .map(|image| image.dimensions())
+        .map_err(|error| format!("{path} 不是有效的图片：{error}"))?;
+
+    let Some(sink) = media else {
+        return Err("当前环境不支持加载图片到对话".into());
+    };
+    sink.attach_image(&relative(root, &target))?;
+    Ok(format!(
+        "已加载 {path}（{width}x{height}），这张图会在下一步出现，可以据此回答。"
+    ))
 }
 
 #[cfg(test)]
@@ -713,5 +827,66 @@ mod tests {
     #[test]
     fn read_document_is_registered() {
         assert!(tool_names().contains(&"read_document"));
+    }
+
+    #[test]
+    fn pdf_image_tools_are_registered() {
+        let names = tool_names();
+        assert!(names.contains(&"extract_pdf_images"));
+        assert!(names.contains(&"read_media_file"));
+    }
+
+    struct RecordingSink(std::sync::Mutex<Vec<String>>);
+    impl MediaSink for RecordingSink {
+        fn attach_image(&self, path: &str) -> Result<(), String> {
+            self.0.lock().unwrap().push(path.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_media_file_hands_the_image_to_the_sink() {
+        let root = temp_root("media");
+        // 1x1 PNG
+        let png = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 4));
+        png.save(root.join("a.png")).unwrap();
+
+        let sink = RecordingSink(Default::default());
+        let out = call_with(&root, "read_media_file", &json!({ "path": "a.png" }), Some(&sink));
+        assert!(out.is_ok(), "{out:?}");
+        assert_eq!(sink.0.lock().unwrap().as_slice(), ["a.png"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_media_file_rejects_non_images() {
+        let root = temp_root("media-bad");
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let sink = RecordingSink(Default::default());
+        let error =
+            call_with(&root, "read_media_file", &json!({ "path": "a.txt" }), Some(&sink)).unwrap_err();
+        assert!(error.contains("不是可加载的图片"), "{error}");
+        assert!(sink.0.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_media_file_without_sink_is_refused() {
+        let root = temp_root("media-nosink");
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 4))
+            .save(root.join("a.png"))
+            .unwrap();
+        let error = call(&root, "read_media_file", &json!({ "path": "a.png" })).unwrap_err();
+        assert!(error.contains("不支持加载图片"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extract_pdf_images_reports_none_for_text_pdf() {
+        let root = temp_root("pdf-noimg");
+        std::fs::write(root.join("a.pdf"), b"not a real pdf").unwrap();
+        let result = call(&root, "extract_pdf_images", &json!({ "path": "a.pdf" }));
+        assert!(result.is_err(), "坏 PDF 应该报错");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

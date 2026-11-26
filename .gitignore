@@ -19,3 +19,6 @@ test-page.html
 test-script.js
 test-script.py
 test_write.txt
+
+# 用户上传的附件
+uploads/

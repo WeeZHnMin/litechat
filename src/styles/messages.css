@@ -659,6 +659,42 @@
   white-space: nowrap;
 }
 
+/* 非图片附件：用扩展名色块表示类型，和消息区文件卡片保持一致的视觉语言。
+   高度与图片缩略图对齐（56px），一行里不会高低不一。 */
+.attachment-chip--file {
+  height: 56px;
+  max-width: 190px;
+  padding: 0 10px 0 4px;
+  gap: 8px;
+}
+
+.attachment-chip--file > .attachment-badge {
+  display: flex;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: #fff;
+  background: #6b7280;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  overflow: visible;
+}
+
+.attachment-chip--file > .attachment-name {
+  min-width: 0;
+  font-size: 10px;
+  color: #555;
+}
+
+.attachment-chip--file > button {
+  margin-left: 2px;
+}
+
 .attachment-chip--image {
   position: relative;
   padding: 0;
@@ -769,6 +805,8 @@
   .citation-number { color: #bbb; background: #303131; }
   .attachment-chip { color: #bbb; background: #303131; }
   .attachment-chip--image { background: #303131; }
+  .attachment-chip--file > .attachment-badge { color: #1d1e1e; background: #9aa0a6; }
+  .attachment-chip--file > .attachment-name { color: #ccc; }
   .attachment-chip--image > button { background: rgb(0 0 0 / 70%); }
   .attachment-chip:not(.attachment-chip--image) button { color: #8a8a8a; }
   .reasoning-block > summary { color: #6f6f6f; }

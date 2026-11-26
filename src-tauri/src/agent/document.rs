@@ -254,8 +254,31 @@ fn format_number(value: f64) -> String {
     }
 }
 
+/// 把 panic 的 payload 转成人能读的一句话。
+fn panic_reason(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        return (*text).to_string();
+    }
+    if let Some(text) = payload.downcast_ref::<String>() {
+        return text.clone();
+    }
+    "未知原因".into()
+}
+
 fn read_pdf(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
-    let text = pdf_extract::extract_text_from_mem(bytes)
+    // pdf-extract 遇到不支持的字体编码（如 GBK-EUC-H）会直接 panic 而不是
+    // 返回错误。放任不管会把整个对话流带崩，所以这里必须兜住。
+    // 同时临时屏蔽 panic 消息，否则每份问题 PDF 都会往日志刷一屏堆栈。
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let outcome = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(bytes));
+    std::panic::set_hook(previous);
+
+    let text = outcome
+        .map_err(|payload| {
+            let reason = panic_reason(&payload);
+            format!("{name}：PDF 里的字体编码暂不支持（{reason}），无法提取文字")
+        })?
         .map_err(|error| format!("{name}：PDF 解析失败（{error}）"))?;
     let mut result = Extracted::new("PDF");
     let trimmed = text.trim();
@@ -528,3 +551,35 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod real_pdf_tests {
+    use super::*;
+
+    /// 真实的一份带 GBK-EUC-H 字体的 PDF：pdf-extract 会 panic，
+    /// 必须被 catch_unwind 接住并转成普通错误。
+    ///
+    /// 用 LITECHAT_PDF_FIXTURE 指向一份会触发该 panic 的 PDF 才会真正执行；
+    /// 平时跳过，不依赖仓库里的二进制样本。
+    #[test]
+    fn unsupported_font_encoding_does_not_panic() {
+        let Ok(path) = std::env::var("LITECHAT_PDF_FIXTURE") else {
+            eprintln!("跳过：未设置 LITECHAT_PDF_FIXTURE");
+            return;
+        };
+        if !std::path::Path::new(&path).is_file() {
+            eprintln!("跳过：{path} 不存在");
+            return;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let outcome = extract("sample.pdf", &bytes);
+        match outcome {
+            Ok(extracted) => eprintln!("解析成功，{} 字符", extracted.text.chars().count()),
+            Err(message) => {
+                assert!(!message.is_empty());
+                eprintln!("按预期返回错误而不是崩溃：{message}");
+            }
+        }
+    }
+}
+

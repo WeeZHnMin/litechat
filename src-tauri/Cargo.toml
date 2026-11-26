@@ -23,6 +23,7 @@ base64 = "0.21"
 image = { version = "0.25", default-features = false, features = ["png"] }
 calamine = "0.38"
 pdf-extract = "0.12"
+lopdf = "0.42"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 tokio = { version = "1", features = ["sync", "process", "io-util", "rt", "time"] }
@@ -42,7 +43,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [profile.release]
-panic = "abort"
+# 不用 panic = "abort"：pdf-extract 遇到不支持的字体编码会 panic，
+# 需要 catch_unwind 兜住，否则 release 版会直接闪退。
 codegen-units = 1
 lto = true
 opt-level = "s"

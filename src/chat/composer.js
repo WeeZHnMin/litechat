@@ -14,7 +14,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
   const thinkingToggle = document.querySelector("#thinking-toggle");
   const list = document.querySelector("#attachment-list");
   const composer = document.querySelector("#composer");
-  const objectUrls = new Set();
   const previewUrls = new Map();
   const sentTexts = [];
   let selectedFiles = [];
@@ -47,10 +46,18 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
         thumb.addEventListener("click", () => showImagePreview(url, file.name, file.name));
         chip.append(thumb);
       } else {
+        // 非图片没有可渲染的内容，用扩展名徽标表示类型
+        const badge = document.createElement("span");
+        badge.className = "attachment-badge";
+        const extension = (file.name.split(".").pop() || "FILE").toUpperCase();
+        badge.textContent = extension.slice(0, 4);
+        badge.setAttribute("aria-hidden", "true");
         const name = document.createElement("span");
+        name.className = "attachment-name";
         name.textContent = file.name;
         name.title = file.name;
-        chip.append(name);
+        chip.classList.add("attachment-chip--file");
+        chip.append(badge, name);
       }
 
       const remove = document.createElement("button");
@@ -72,8 +79,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
     input.value = "";
     historyIndex = -1;
     draft = "";
-    for (const url of objectUrls) URL.revokeObjectURL(url);
-    objectUrls.clear();
     renderAttachments();
   }
 
@@ -141,9 +146,9 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
         parts.push(part);
         continue;
       }
+      // 只编码一次：图片要 base64 走多模态，文档要 base64 落盘
       const data = await fileToBase64(file);
       if (isImage) {
-        // 图片直接走多模态通道，模型能看图
         part.data = data;
       } else {
         // 文档存到工作目录，消息里只留路径；模型需要时用 read_document 读
@@ -153,9 +158,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
           console.error("[附件] 保存失败:", error);
           part.uploadError = String(error);
         }
-        const url = URL.createObjectURL(file);
-        objectUrls.add(url);
-        part.url = url;
       }
       parts.push(part);
     }
@@ -182,7 +184,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
     let parts;
     try {
       parts = await buildParts(text, files);
-      console.log("[send] parts:", parts.map((p) => `${p.type}${p.data ? `/data:${p.data.length}` : ""}`));
     } catch (error) {
       console.error("[send] 构建消息失败:", error);
       return;

@@ -372,9 +372,7 @@ pub async fn test_model_config(
     }
 
     let started = std::time::Instant::now();
-    eprintln!("[model-test] POST {url} model={}", candidate.model);
     let response = request.send().await.map_err(|error| {
-        eprintln!("[model-test] 发送失败: {error}");
         if error.is_timeout() {
             format!("连接超时（{TEST_TIMEOUT_SECS} 秒），请检查接口地址与网络")
         } else {
@@ -384,7 +382,6 @@ pub async fn test_model_config(
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    eprintln!("[model-test] 响应 {status} 用时 {elapsed_ms}ms");
 
     if !status.is_success() {
         return Err(format!(

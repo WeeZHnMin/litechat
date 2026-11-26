@@ -315,11 +315,6 @@ where
         return Err(ProviderError::MissingApiKey);
     }
     let body = build_body(config, messages, tools);
-    {
-        let preview = serde_json::to_string(&body).unwrap_or_default();
-        let clipped: String = preview.chars().take(1200).collect();
-        eprintln!("[req] {clipped}");
-    }
     let client = reqwest::Client::builder()
         .build()
         .map_err(|error| ProviderError::Transport(error.to_string()))?;
