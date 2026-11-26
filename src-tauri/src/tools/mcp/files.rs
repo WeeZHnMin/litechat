@@ -595,7 +595,8 @@ pub trait MediaSink: Send + Sync {
     fn attach_image(&self, path: &str) -> Result<(), String>;
 }
 
-/// 不加载图片的调用（测试和不需要媒体通道的场景用）。
+/// 不加载图片的调用，仅供测试使用。
+#[cfg(test)]
 pub fn call(root: &Path, tool: &str, args: &Value) -> Result<String, String> {
     call_with(root, tool, args, None)
 }

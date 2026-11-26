@@ -104,7 +104,7 @@ export function settingsViewHtml() {
       <section class="settings-section">
         <div class="settings-section-head">
           <h2>文件工具</h2>
-          <p>内置的文件读写工具只能访问这个目录及其子目录。</p>
+          <p>内置的文件读写工具只能访问这个目录及其子目录。上传的附件也会存在这里的 uploads/ 下。</p>
         </div>
         <div class="settings-card settings-card--padded">
           <div class="setting-field">
