@@ -160,6 +160,10 @@ async fn run(program: &str, args: &[&str], cwd: Option<&str>) -> Result<String, 
     } else if code != 0 {
         output.push_str(&format!("\n[退出码 {code}]"));
     }
+    // 回显执行目录：模型据此判断相对路径解析到了哪里，避免误判文件状态
+    if let Some(directory) = cwd.filter(|value| !value.trim().is_empty()) {
+        output.push_str(&format!("\n[工作目录] {directory}"));
+    }
     Ok(truncate(output))
 }
 
@@ -192,7 +196,14 @@ fn encode_powershell(script: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-pub async fn call(tool: &str, arguments: &Value) -> Result<String, String> {
+/// `workspace` 是文件工具的根目录，也是命令行工具的默认工作目录。
+/// 两者必须一致，否则 `write_file` 写在 A、`run_command` 跑到 B，
+/// 命令会对着不存在的路径「成功」执行，让模型误判文件状态。
+pub async fn call(
+    tool: &str,
+    arguments: &Value,
+    workspace: &std::path::Path,
+) -> Result<String, String> {
     if tool == list_tools_tool() {
         return Ok(String::new());
     }
@@ -203,9 +214,16 @@ pub async fn call(tool: &str, arguments: &Value) -> Result<String, String> {
     if command.trim().is_empty() {
         return Err("command 不能为空".into());
     }
+    // 调用方没指定 cwd 时回到工作目录根，与文件工具保持一致
+    let default_cwd = workspace.to_string_lossy().to_string();
+    let requested_cwd = arguments
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let cwd = requested_cwd.unwrap_or(&default_cwd);
     match tool {
         "run_command" => {
-            let cwd = arguments.get("cwd").and_then(Value::as_str);
             let script = format!(
                 "$ProgressPreference = 'SilentlyContinue'\n\
                  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n\
@@ -216,11 +234,11 @@ pub async fn call(tool: &str, arguments: &Value) -> Result<String, String> {
             run(
                 "powershell",
                 &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded],
-                cwd,
+                Some(cwd),
             )
             .await
         }
-        "run_shell" => run("cmd", &["/C", command], None).await,
+        "run_shell" => run("cmd", &["/C", command], Some(cwd)).await,
         other => Err(format!("未知工具: {other}")),
     }
 }
@@ -361,21 +379,84 @@ mod tests {
         assert_eq!(describe_tools(&[]), "当前没有可调用的工具。");
     }
 
+    fn workspace() -> std::path::PathBuf {
+        std::env::temp_dir()
+    }
+
+    /// 读 stdout/stderr 的任务要和 wait() 并发，必须是多线程运行时。
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
     #[test]
     fn rejects_missing_command() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("runtime");
-        let result = runtime.block_on(call("run_command", &json!({})));
+        let runtime = runtime();
+        let result = runtime.block_on(call("run_command", &json!({}), &workspace()));
         assert!(result.is_err());
     }
 
     #[test]
     fn rejects_empty_command() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("runtime");
-        let result = runtime.block_on(call("run_shell", &json!({ "command": "  " })));
+        let runtime = runtime();
+        let result = runtime.block_on(call("run_shell", &json!({ "command": "  " }), &workspace()));
         assert!(result.is_err());
+    }
+
+    /// Windows 路径比较要忽略 `\\?\` 前缀和尾部反斜杠。
+    fn normalize(path: &str) -> String {
+        path.trim()
+            .trim_start_matches(r"\\?\")
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_ascii_lowercase()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn commands_default_to_the_workspace_root() {
+        let runtime = runtime();
+        let root = std::env::temp_dir();
+        // 不传 cwd 时应当跑在工作目录里，而不是进程自身目录
+        let output = runtime
+            .block_on(call(
+                "run_command",
+                &json!({ "command": "Write-Output \"PWD=$((Get-Location).Path)\"" }),
+                &root,
+            ))
+            .expect("命令应能执行");
+        let line = output
+            .lines()
+            .find(|line| line.starts_with("PWD="))
+            .unwrap_or_else(|| panic!("没有输出 PWD：{output}"));
+        let actual = normalize(&line[4..]);
+        let expected = normalize(&root.display().to_string());
+        assert_eq!(actual, expected, "命令应默认在工作目录执行：{output}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn explicit_cwd_still_wins() {
+        let runtime = runtime();
+        let elsewhere = std::env::temp_dir();
+        let output = runtime
+            .block_on(call(
+                "run_command",
+                &json!({
+                    "command": "Write-Output \"PWD=$((Get-Location).Path)\"",
+                    "cwd": elsewhere.display().to_string()
+                }),
+                &std::path::Path::new("C:\\"),
+            ))
+            .expect("命令应能执行");
+        let line = output
+            .lines()
+            .find(|line| line.starts_with("PWD="))
+            .unwrap_or_else(|| panic!("没有输出 PWD：{output}"));
+        let actual = normalize(&line[4..]);
+        let expected = normalize(&elsewhere.display().to_string());
+        assert_eq!(actual, expected, "显式 cwd 应优先：{output}");
     }
 }

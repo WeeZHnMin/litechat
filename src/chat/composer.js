@@ -142,11 +142,9 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
     return parts;
   }
 
-  async function send() {
-    if (composer.classList.contains("is-busy")) return;
+  async function send({ interrupt = false } = {}) {
     const text = input.value.trim();
     const files = [...selectedFiles];
-    console.log("[send] 文件数:", files.length, files.map((f) => `${f.name}/${f.type}`));
     if (!text && !files.length) return;
 
     historyIndex = -1;
@@ -170,9 +168,14 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
       return;
     }
     const message = { role: "user", parts };
-    appendMessage(message);
-    window.dispatchEvent(new CustomEvent("litechat:send", { detail: { text, files, message } }));
+    const busy = composer.classList.contains("is-busy");
+    // 生成中发出的消息立刻上屏，并显示「等待模型读取」标记
+    const rendered = appendMessage(message, { pending: busy });
+    window.dispatchEvent(
+      new CustomEvent("litechat:send", { detail: { text, files, message, rendered } }),
+    );
     input.focus();
+    return rendered;
   }
 
   function addFiles(files) {
@@ -301,9 +304,9 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
 
   function setBusy(busy) {
     composer.classList.toggle("is-busy", busy);
-    attachButton.disabled = busy;
-    thinkingToggle.disabled = busy;
+    // 生成中也允许继续输入和发消息：消息会排队，等模型下一步思考前注入
     input.setAttribute("aria-busy", String(busy));
+    input.placeholder = busy ? "继续输入，模型会在下一步看到…" : "发消息...";
     stopButton.hidden = !busy;
     if (!busy) input.focus();
   }

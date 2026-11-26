@@ -26,8 +26,11 @@ const manager = new ViewManager({
   conversation: document.querySelector("#conversation"),
   composer: document.querySelector("#composer"),
 });
-function renderMessage(message) {
-  return appendMessage(message, { onResend: (text) => composer.setText(text) });
+function renderMessage(message, options = {}) {
+  return appendMessage(message, {
+    onResend: (text) => composer.setText(text),
+    ...options,
+  });
 }
 
 let modelSettings = null;
@@ -45,6 +48,12 @@ const runner = createConversationRunner({
   history,
   getConversationId: () => history.currentId,
   onBusyChange: (busy) => composer.setBusy(busy),
+});
+/** 等待模型读取的用户消息，按发送顺序配对 input-accepted 事件。 */
+const pendingMessages = [];
+window.addEventListener("litechat:input-accepted", () => {
+  // 后端按顺序注入，因此最早发出的那条就是被读到的
+  pendingMessages.shift()?.markAccepted?.();
 });
 history.onLeave = () => runner.stop();
 const settings = initSettings(manager);
@@ -83,13 +92,22 @@ function startNewChat() {
   composer.focus();
 }
 
-window.addEventListener("litechat:send", (event) => {
-  const { message } = event.detail;
-  if (window.__TAURI_INTERNALS__) {
-    void runner.send(message);
+window.addEventListener("litechat:send", async (event) => {
+  const { message, rendered } = event.detail;
+  if (!window.__TAURI_INTERNALS__) {
+    void history.record(message);
     return;
   }
-  void history.record(message);
+  // 生成中：不打断当前轮，交给后端在下一段思考前注入
+  if (runner.isBusy) {
+    const queued = await runner.queueDuringStream(message);
+    if (queued) {
+      pendingMessages.push(rendered);
+      // 落库交给这一轮的 finish 统一处理，保证「助手段 → 用户 → 助手段」的顺序
+      return;
+    }
+  }
+  void runner.send(message);
 });
 
 window.liteChat = {

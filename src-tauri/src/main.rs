@@ -47,6 +47,7 @@ fn main() {
             agent::models::set_reasoning_effort,
             agent::chat::send_chat,
             agent::chat::cancel_stream,
+            agent::chat::queue_user_input,
             tools::mcp::commands::get_mcp_servers,
             tools::mcp::commands::get_mcp_tools,
             tools::mcp::commands::save_mcp_servers,

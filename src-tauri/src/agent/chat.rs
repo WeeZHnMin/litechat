@@ -14,6 +14,50 @@ const MAX_TOOL_CALLS: usize = 500;
 #[derive(Default)]
 pub struct ActiveStreams(Mutex<Vec<String>>);
 
+/// 生成过程中用户新发的消息。按 stream_id 分组，等下一个模型请求开始时注入。
+#[derive(Default)]
+pub struct QueuedInput(Mutex<std::collections::HashMap<String, Vec<String>>>);
+
+impl QueuedInput {
+    fn push(&self, stream_id: &str, text: String) {
+        if let Ok(mut map) = self.0.lock() {
+            map.entry(stream_id.to_string()).or_default().push(text);
+        }
+    }
+
+    fn take(&self, stream_id: &str) -> Vec<String> {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|mut map| map.remove(stream_id))
+            .unwrap_or_default()
+    }
+
+    fn drop_stream(&self, stream_id: &str) {
+        if let Ok(mut map) = self.0.lock() {
+            map.remove(stream_id);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn queue_user_input(
+    app: AppHandle,
+    stream_id: String,
+    text: String,
+) -> Result<(), String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("不能发送空消息".into());
+    }
+    if !is_active(&app, &stream_id) {
+        return Err("这条回复已经结束".into());
+    }
+    app.state::<QueuedInput>()
+        .push(&stream_id, trimmed.to_string());
+    Ok(())
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DeltaPayload {
@@ -39,6 +83,13 @@ struct ToolCallPayload {
     phase: String,
     result: Option<String>,
     error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InputAcceptedPayload {
+    stream_id: String,
+    text: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -90,6 +141,7 @@ pub async fn send_chat(
                 active.retain(|item| item != &id);
             };
         }
+        handle.state::<QueuedInput>().drop_stream(&id);
         match result {
             Ok(()) => {
                 let _ = handle.emit("chat://done", DonePayload { stream_id: id });
@@ -141,6 +193,18 @@ async fn run_turn(
     for _ in 0..MAX_TOOL_ROUNDS {
         if !is_active(&app, &stream_id) {
             return Ok(());
+        }
+        // 上一段输出已结束、工具还没跑（或刚跑完）——此时插入用户新消息，
+        // 让模型在下一段思考开始前就看见它，顺序天然正确。
+        for text in app.state::<QueuedInput>().take(&stream_id) {
+            let _ = app.emit(
+                "chat://input-accepted",
+                InputAcceptedPayload {
+                    stream_id: stream_id.clone(),
+                    text: text.clone(),
+                },
+            );
+            messages.push(ChatMessage::text("user", text));
         }
         let calls = stream_once(&app, &provider, &messages, &specs, &stream_id).await?;
         if calls.is_empty() {
@@ -373,4 +437,41 @@ mod tests {
         assert_eq!(repeats_of(&seen, "c(3)"), 0);
     }
 
+    #[test]
+    fn queued_input_preserves_order_and_is_consumed_once() {
+        let queue = QueuedInput::default();
+        queue.push("s1", "第一条".into());
+        queue.push("s1", "第二条".into());
+        assert_eq!(queue.take("s1"), vec!["第一条", "第二条"]);
+        // 取出后即清空，不会重复注入
+        assert!(queue.take("s1").is_empty());
+    }
+
+    #[test]
+    fn queued_input_is_isolated_per_stream() {
+        let queue = QueuedInput::default();
+        queue.push("s1", "给第一条流".into());
+        queue.push("s2", "给第二条流".into());
+        assert_eq!(queue.take("s1"), vec!["给第一条流"]);
+        assert_eq!(queue.take("s2"), vec!["给第二条流"]);
+    }
+
+    #[test]
+    fn drop_stream_discards_leftovers() {
+        let queue = QueuedInput::default();
+        queue.push("s1", "没赶上".into());
+        queue.drop_stream("s1");
+        assert!(queue.take("s1").is_empty());
+    }
+
+    #[test]
+    fn input_accepted_payload_uses_camel_case() {
+        let value = serde_json::to_value(InputAcceptedPayload {
+            stream_id: "abc".into(),
+            text: "补充一句".into(),
+        })
+        .unwrap();
+        assert_eq!(value["streamId"], "abc");
+        assert_eq!(value["text"], "补充一句");
+    }
 }

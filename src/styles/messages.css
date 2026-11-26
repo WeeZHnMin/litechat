@@ -9,6 +9,11 @@
   margin: 0 0 20px;
 }
 
+/* 连续发送的用户消息：收窄间距，让人看出这是同一批发言 */
+.message--user + .message--followup {
+  margin-top: -12px;
+}
+
 .message--user {
   justify-content: flex-end;
 }
@@ -393,6 +398,20 @@
   display: block;
   margin-top: 6px;
   color: #999;
+  font-size: 10px;
+}
+
+/* 生成中发出的消息：已上屏，等模型在下一段思考前读到 */
+.message--pending .message-content {
+  opacity: 0.72;
+  transition: opacity 200ms ease;
+}
+
+.message--pending .message-content::after {
+  content: "等待模型读取…";
+  display: block;
+  margin-top: 6px;
+  color: #8b8b8b;
   font-size: 10px;
 }
 

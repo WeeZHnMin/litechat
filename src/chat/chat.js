@@ -147,10 +147,16 @@ function attachMessageMenu(element, message, extraItems = []) {
   });
 }
 
-export function appendMessage(message, { onResend } = {}) {
+export function appendMessage(message, { onResend, pending = false } = {}) {
   const role = message.role === "user" ? "user" : "assistant";
   const element = document.createElement("article");
   element.className = `message message--${role}`;
+  if (pending) element.classList.add("message--pending");
+  // 连续两条用户消息（中间没有助手回复）时收窄间距，视觉上归为一组
+  const previous = getConversation().lastElementChild;
+  if (role === "user" && previous?.classList.contains("message--user")) {
+    element.classList.add("message--followup");
+  }
   const content = document.createElement("div");
   content.className = "message-content";
   let tools = null;
@@ -180,7 +186,31 @@ export function appendMessage(message, { onResend } = {}) {
   attachMessageMenu(element, message, extraItems);
   getConversation().append(element);
   scrollToBottom();
-  return { element, content };
+  return {
+    element,
+    content,
+    /** 模型已读到这条消息时去掉等待标记。 */
+    markAccepted() {
+      element.classList.remove("message--pending");
+    },
+  };
+}
+
+/** 把时间线转成可持久化的 parts。 */
+function timelineToParts(entries) {
+  return entries
+    .map((entry) => {
+      if (entry.kind === "text") {
+        return entry.text.trim() ? { type: "markdown", text: entry.text } : null;
+      }
+      if (entry.kind === "reasoning") {
+        return entry.text.trim()
+          ? { type: "reasoning", text: entry.text, seconds: entry.seconds }
+          : null;
+      }
+      return { type: "tool", ...entry.record };
+    })
+    .filter(Boolean);
 }
 
 export function createAssistantStream() {
@@ -189,7 +219,7 @@ export function createAssistantStream() {
   let lastRenderAt = 0;
   let finished = false;
   const MIN_RENDER_INTERVAL = 50;
-  const { element, content } = appendMessage({ role: "assistant", parts: [] });
+  let { element, content } = appendMessage({ role: "assistant", parts: [] });
   element.classList.add("is-streaming");
 
   const timeline = [];
@@ -197,6 +227,33 @@ export function createAssistantStream() {
   const toolIndex = new Map();
   let reasoningEntry = null;
   let textEntry = null;
+  /** 被用户消息打断过的段落，按出现顺序记录，落库时要拼回去。 */
+  const finishedSegments = [];
+
+  /**
+   * 用户消息要插进这一轮中间：把当前已生成的内容封成一段，
+   * 后续输出改写到新的助手元素里，避免新内容跑到用户消息上方。
+   */
+  function split() {
+    if (finished) return null;
+    settleText();
+    closeReasoning();
+    reasoningEntry = null;
+    cancelPending();
+    const parts = timelineToParts(timeline);
+    timeline.length = 0;
+    toolIndex.clear();
+    element.classList.remove("is-streaming");
+    if (parts.length) {
+      finishedSegments.push(parts);
+    } else {
+      // 这一段什么都没产出，别留个空壳在对话里
+      element.remove();
+    }
+    ({ element, content } = appendMessage({ role: "assistant", parts: [] }));
+    element.classList.add("is-streaming");
+    return element;
+  }
 
   function newTextEntry() {
     const markdown = document.createElement("div");
@@ -325,7 +382,16 @@ export function createAssistantStream() {
     }
   };
 
+  // 被用户消息打断过的话，前面那些段落也要算进最终文本
+  const settledText = () =>
+    finishedSegments
+      .flat()
+      .filter((part) => part.type === "markdown")
+      .map((part) => part.text ?? "")
+      .join("");
+
   const answerText = () =>
+    settledText() +
     timeline
       .filter((entry) => entry.kind === "text")
       .map((entry) => entry.text)
@@ -339,6 +405,8 @@ export function createAssistantStream() {
 
   return {
     element,
+    /** 用户消息要插进来时调用：封存当前段并返回新的空助手元素。 */
+    split,
     push(chunk) {
       if (finished) return;
       textChunk(chunk);
@@ -370,21 +438,9 @@ export function createAssistantStream() {
       return allTools().map((entry) => entry.element);
     },
     get parts() {
-      return timeline
-        .map((entry) => {
-          if (entry.kind === "text") {
-            return entry.text.trim()
-              ? { type: "markdown", text: entry.text }
-              : null;
-          }
-          if (entry.kind === "reasoning") {
-            return entry.text.trim()
-              ? { type: "reasoning", text: entry.text, seconds: entry.seconds }
-              : null;
-          }
-          return { type: "tool", ...entry.record };
-        })
-        .filter(Boolean);
+      // 被用户消息打断过的话，要按「段1 → 段2 → …」拼回完整时间线
+      const merged = [...finishedSegments.flat(), ...timelineToParts(timeline)];
+      return merged;
     },
     done({ markInterrupted = false } = {}) {
       if (finished) return answerText();
@@ -394,6 +450,7 @@ export function createAssistantStream() {
       render(true);
       element.classList.remove("is-streaming");
       if (markInterrupted) element.classList.add("message--interrupted");
+      // 滚动到这一轮的开头，让用户从头读；中间被插话时去第一段那里
       const firstText = timeline.find((entry) => entry.kind === "text");
       scrollToAnchor(firstText?.element ?? content);
       return answerText();
@@ -404,6 +461,10 @@ export function createAssistantStream() {
       element.classList.remove("is-streaming");
       element.classList.add("message--error");
       content.replaceChildren(renderMarkdown(error?.message || "回复生成失败，请稍后重试。", { enhance: false }));
+    },
+    /** 落库用：把被插话切开的段落按顺序拼成一条完整消息。 */
+    get segments() {
+      return [...finishedSegments, timelineToParts(timeline)];
     },
   };
 }

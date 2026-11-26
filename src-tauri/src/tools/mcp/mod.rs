@@ -417,7 +417,7 @@ impl McpManager {
             let root = self.workspace();
             return files::call(&root, tool, &arguments);
         }
-        builtin::call(tool, &arguments).await
+        builtin::call(tool, &arguments, &self.workspace()).await
     }
 
     pub async fn statuses(&self) -> Vec<McpServerStatus> {

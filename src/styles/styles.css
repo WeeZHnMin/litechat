@@ -252,12 +252,18 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 0;
+  padding: 12px 14px;
   border-bottom: 1px solid #f0f0f0;
 }
 
 .setting-row:last-child {
   border-bottom: 0;
+}
+
+/* 加了内边距的卡片已经自带左右留白，里面的行不要再叠加一次 */
+.settings-card--padded .setting-row {
+  padding-right: 0;
+  padding-left: 0;
 }
 
 .setting-copy {

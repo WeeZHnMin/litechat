@@ -2,8 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createAssistantStream } from "./chat";
 
-export function createConversationRunner({ history, getConversationId, onBusyChange }) {
+export function createConversationRunner({ history, getConversationId, onBusyChange, onQueuedChange }) {
   let current = null;
+  /** 生成中收到的消息先排在这里，当前轮结束后按序发出。 */
+  let pending = [];
 
   function isTauri() {
     return Boolean(window.__TAURI_INTERNALS__);
@@ -31,8 +33,48 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
     onBusyChange?.(Boolean(stream), stream?.streamId ?? null);
   }
 
+  /**
+   * 把这一轮落库。没被插话时就是一条助手消息；
+   * 被插话过则按「助手段 → 用户消息 → 助手段 …」的顺序还原。
+   */
+  async function persistSplit(stream, parts, interleaved = []) {
+    const segments = stream?.segments;
+    if (!segments || segments.length <= 1 || !interleaved.length) {
+      await history.record({ role: "assistant", parts });
+      return;
+    }
+    for (const [index, segment] of segments.entries()) {
+      if (segment.length) {
+        await history.record({ role: "assistant", parts: segment });
+      }
+      const userMessage = interleaved[index];
+      if (userMessage) {
+        await history.record(userMessage);
+      }
+    }
+  }
+
   async function send(message) {
-    if (current || !isTauri()) return;
+    if (!isTauri()) return;
+    // 生成中：先排队，由 finish/stop 负责接续，不在中途另开一条流
+    if (current) {
+      pending.push(message);
+      onQueuedChange?.(pending.length);
+      return;
+    }
+    await run(message);
+  }
+
+  /** 生成中再发一条：打断当前轮，把新消息插进来立即处理。 */
+
+  async function drainQueue() {
+    if (current || !pending.length) return;
+    const next = pending.shift();
+    onQueuedChange?.(pending.length);
+    await run(next);
+  }
+
+  async function run(message) {
     let conversationId;
     try {
       conversationId = await ensureConversation(message);
@@ -44,6 +86,8 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
     const stream = createAssistantStream();
     let streamId = null;
     let settled = false;
+    /** 本轮里被用户插话的消息，按插入顺序排列。 */
+    const interleaved = [];
 
     const unlisten = [];
     const cleanup = () => {
@@ -59,8 +103,13 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
       stream.done(options);
       const parts = stream.parts;
       setBusy(null);
-      if (!parts.length) return;
-      void history.record({ role: "assistant", parts });
+      if (parts.length) {
+        // 被用户插话打断过的话，按「助手段 → 用户消息 → 助手段」的顺序落库，
+        // 重新加载才能和界面显示一致
+        void persistSplit(stream, parts, interleaved).then(() => drainQueue());
+      } else {
+        void drainQueue();
+      }
     };
 
     const fail = (message) => {
@@ -69,6 +118,7 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
       cleanup();
       stream.fail(new Error(message));
       setBusy(null);
+      void drainQueue();
     };
 
     unlisten.push(
@@ -85,6 +135,14 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
         if (name === "add_mcp_server" || name === "remove_mcp_server") {
           window.dispatchEvent(new CustomEvent("litechat:mcp-changed"));
         }
+      }),
+    );
+    unlisten.push(
+      await listen("chat://input-accepted", (event) => {
+        if (event.payload?.streamId !== streamId) return;
+        window.dispatchEvent(
+          new CustomEvent("litechat:input-accepted", { detail: event.payload }),
+        );
       }),
     );
     unlisten.push(
@@ -116,18 +174,69 @@ export function createConversationRunner({ history, getConversationId, onBusyCha
       void invoke("cancel_stream", { streamId }).catch(() => {});
       return;
     }
-    setBusy({ streamId, stop: () => finish({ markInterrupted: true }) });
+    setBusy({
+      streamId,
+      stream,
+      interleaved,
+      stop: () => finish({ markInterrupted: true }),
+    });
   }
 
+  /** 生成中再发一条：交给后端，在下一段思考开始前注入。 */
+  async function queueDuringStream(message) {
+    if (!current || !isTauri()) return false;
+    const text = (message.parts ?? [])
+      .filter((part) => ["text", "markdown"].includes(part.type))
+      .map((part) => part.text ?? "")
+      .join("\n\n")
+      .trim();
+    if (!text) return false;
+    try {
+      await invoke("queue_user_input", { streamId: current.streamId, text });
+      // 用户消息此刻已经上屏，把助手这一轮断开，后续内容才会排在它下面
+      current.stream?.split?.();
+      // 记下插在第几段之后，落库时按同样顺序还原
+      current.interleaved.push(message);
+      return true;
+    } catch (error) {
+      console.error("Unable to queue message:", error);
+      return false;
+    }
+  }
+
+  /** 用户点「停止」：中断当前轮，队列里的消息照常继续。 */
   function stop() {
     current?.stop();
   }
 
+  /** 用户想立刻发新消息：丢掉未发出的排队项，只发这一条。 */
+  async function sendNow(message) {
+    if (!isTauri()) return;
+    if (!current) {
+      await run(message);
+      return;
+    }
+    pending = [message];
+    onQueuedChange?.(pending.length);
+    current.stop();
+  }
+
+  function clearQueue() {
+    pending = [];
+    onQueuedChange?.(0);
+  }
+
   return {
     send,
+    sendNow,
+    queueDuringStream,
     stop,
+    clearQueue,
     get isBusy() {
       return Boolean(current);
+    },
+    get queuedCount() {
+      return pending.length;
     },
   };
 }
