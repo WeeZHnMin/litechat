@@ -34,7 +34,7 @@ let modelSettings = null;
 const composer = initComposer({
   appendMessage: renderMessage,
   onStop: () => runner.stop(),
-  onThinkingChange: (enabled) => void modelSettings?.setThinking(enabled),
+  onReasoningChange: (effort) => modelSettings?.setReasoningEffort(effort),
 });
 const history = initHistory(manager, {
   appendMessage: renderMessage,
@@ -58,7 +58,7 @@ manager.setBaseline(
   }),
 );
 modelSettings = initModelSettings({
-  onThinkingChange: (enabled) => composer.setThinking(enabled),
+  onReasoningChange: (effort) => composer.setReasoningEffort(effort),
 });
 initMcpSettings();
 initWorkspaceSettings();

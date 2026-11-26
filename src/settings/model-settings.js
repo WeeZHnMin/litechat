@@ -36,6 +36,18 @@ const BASE_URLS = {
   deepseek: "https://api.deepseek.com/v1",
 };
 
+/** OpenAI 协议的推理强度档位。off 表示不发送该字段。 */
+export const REASONING_LEVELS = [
+  { value: "off", label: "关闭", hint: "不请求思考过程" },
+  { value: "low", label: "低", hint: "快速思考，省 token" },
+  { value: "medium", label: "中", hint: "平衡速度与深度" },
+  { value: "high", label: "高", hint: "深入推理，较慢" },
+];
+
+export function reasoningLabel(value) {
+  return REASONING_LEVELS.find((item) => item.value === value)?.label ?? "关闭";
+}
+
 const CSS = {
   provider: "#model-provider",
   baseUrl: "#model-base-url",
@@ -44,6 +56,7 @@ const CSS = {
   keyHint: "#model-key-hint",
   keyClear: "#model-key-clear",
   presetTrigger: "#model-preset-trigger",
+  scanModels: "#model-scan",
   test: "#model-test",
   testResult: "#model-test-result",
   save: "#model-save",
@@ -51,7 +64,7 @@ const CSS = {
   path: "#model-config-path",
 };
 
-export function initModelSettings({ onThinkingChange } = {}) {
+export function initModelSettings({ onReasoningChange } = {}) {
   const el = {
     provider: document.querySelector(CSS.provider),
     baseUrl: document.querySelector(CSS.baseUrl),
@@ -60,6 +73,7 @@ export function initModelSettings({ onThinkingChange } = {}) {
     keyHint: document.querySelector(CSS.keyHint),
     keyClear: document.querySelector(CSS.keyClear),
     presetTrigger: document.querySelector(CSS.presetTrigger),
+    scanModels: document.querySelector(CSS.scanModels),
     test: document.querySelector(CSS.test),
     testResult: document.querySelector(CSS.testResult),
     save: document.querySelector(CSS.save),
@@ -72,7 +86,56 @@ export function initModelSettings({ onThinkingChange } = {}) {
   let dirty = false;
   let loading = false;
   let testing = false;
+  let scanning = false;
   let feedbackTimer = 0;
+
+  function setScanning(value) {
+    scanning = value;
+    el.scanModels.disabled = value;
+    el.scanModels.classList.toggle("is-testing", value);
+    el.scanModels.setAttribute("aria-busy", String(value));
+  }
+
+  async function scanModels() {
+    if (scanning) return;
+    setFeedback("", false);
+    setTestResult("", "ok");
+    setScanning(true);
+    try {
+      const names = await invoke("list_models", {
+        provider: el.provider.value,
+        baseUrl: el.baseUrl.value.trim(),
+        apiKey: currentApiKey(),
+      });
+      if (!names.length) {
+        setTestResult("服务没有返回任何模型", "error");
+        return;
+      }
+      setTestResult(`找到 ${names.length} 个模型，点选即可填入`, "ok");
+      openModelMenu(names);
+    } catch (error) {
+      setTestResult(String(error), "error");
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  function openModelMenu(names) {
+    const rect = el.scanModels.getBoundingClientRect();
+    el.scanModels.setAttribute("aria-expanded", "true");
+    const items = names.map((name) => ({
+      label: name,
+      action: () => {
+        el.model.value = name;
+        markDirty();
+        setTestResult("", "ok");
+      },
+    }));
+    const menu = showContextMenu(rect.left, rect.bottom + 4, items);
+    const reset = () => el.scanModels.setAttribute("aria-expanded", "false");
+    window.addEventListener("pointerdown", reset, { once: true });
+    if (menu) menu.addEventListener("click", reset, { once: true });
+  }
 
   function setFeedback(text, isError) {
     el.error.hidden = !text;
@@ -224,8 +287,8 @@ export function initModelSettings({ onThinkingChange } = {}) {
         provider: el.provider.value,
         baseUrl: el.baseUrl.value.trim(),
         model: el.model.value.trim(),
-        // 深度思考由输入栏的开关控制，这里保存时保持原状，不要覆盖
-        thinking: Boolean(saved?.thinking),
+        // 推理强度由输入栏的按钮控制，这里保存时保持原状，不要覆盖
+        reasoningEffort: saved?.reasoningEffort ?? "off",
         apiKey: currentApiKey(),
       });
       applyView(next);
@@ -271,6 +334,7 @@ export function initModelSettings({ onThinkingChange } = {}) {
   });
 
   el.save.addEventListener("click", save);
+  el.scanModels.addEventListener("click", () => void scanModels());
   el.test.addEventListener("click", () => void test());
   el.apiKey.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.isComposing) {
@@ -303,26 +367,20 @@ export function initModelSettings({ onThinkingChange } = {}) {
       el.path.hidden = true;
     });
 
-  async function setThinking(enabled) {
+  /** 输入栏的档位按钮改了强度后调用：只写这一个字段。 */
+  async function setReasoningEffort(effort) {
     if (!saved) return;
-    const next = { ...saved, thinking: Boolean(enabled) };
     try {
-      const view = await invoke("save_model_config", {
-        provider: next.provider,
-        baseUrl: next.baseUrl,
-        model: next.model,
-        thinking: Boolean(enabled),
-        apiKey: null,
-      });
-      applyView(view);
-      onThinkingChange?.(view.thinking);
+      const view = await invoke("set_reasoning_effort", { effort });
+      saved = view;
+      onReasoningChange?.(view.reasoningEffort);
     } catch (error) {
       setFeedback(String(error), true);
-      onThinkingChange?.(Boolean(saved.thinking));
+      onReasoningChange?.(saved?.reasoningEffort ?? "off");
     }
   }
 
-  void reload().then(() => onThinkingChange?.(Boolean(saved?.thinking)));
+  void reload().then(() => onReasoningChange?.(saved?.reasoningEffort ?? "off"));
 
-  return { reload, setThinking };
+  return { reload, setReasoningEffort };
 }

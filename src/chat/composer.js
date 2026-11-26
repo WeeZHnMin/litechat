@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { closeContextMenu, showContextMenu } from "../ui/context-menu";
+import { REASONING_LEVELS, reasoningLabel } from "../settings/model-settings";
 import { showImagePreview } from "../render/media";
 import { captureWithSnippingTool, pixelsToFile } from "./clipboard-image";
 
 
-export function initComposer({ appendMessage, onStop, onThinkingChange }) {
+export function initComposer({ appendMessage, onStop, onReasoningChange }) {
   const input = document.querySelector("#message-input");
   const picker = document.querySelector("#attachment-input");
   const folderPicker = document.querySelector("#folder-input");
@@ -307,28 +308,74 @@ export function initComposer({ appendMessage, onStop, onThinkingChange }) {
     if (!busy) input.focus();
   }
 
-  function setThinking(enabled) {
-    thinkingToggle.setAttribute("aria-pressed", String(Boolean(enabled)));
-  }
-
-  function getThinking() {
-    return thinkingToggle.getAttribute("aria-pressed") === "true";
-  }
-
   stopButton.addEventListener("click", () => onStop?.());
+
+  let effort = "off";
+
+  function renderEffort() {
+    thinkingToggle.textContent = effort === "off" ? "深度思考" : `思考 · ${reasoningLabel(effort)}`;
+    thinkingToggle.setAttribute("aria-pressed", String(effort !== "off"));
+    thinkingToggle.setAttribute("aria-haspopup", "menu");
+    thinkingToggle.setAttribute("aria-expanded", "false");
+    thinkingToggle.title = "选择模型的推理强度";
+  }
+
+  async function applyEffort(value) {
+    if (value === effort) return;
+    const previous = effort;
+    effort = value;
+    renderEffort();
+    try {
+      await onReasoningChange?.(value);
+    } catch {
+      effort = previous;
+      renderEffort();
+    }
+  }
+
+  function openEffortMenu() {
+    const rect = thinkingToggle.getBoundingClientRect();
+    thinkingToggle.setAttribute("aria-expanded", "true");
+    showContextMenu(
+      rect.left,
+      rect.top - 8,
+      REASONING_LEVELS.map((level) => ({
+        label:
+          level.value === effort
+            ? `✓ ${level.label} · ${level.hint}`
+            : `${level.label} · ${level.hint}`,
+        action: () => void applyEffort(level.value),
+      })),
+      { placement: "above" },
+    );
+    const reset = () => thinkingToggle.setAttribute("aria-expanded", "false");
+    window.addEventListener("pointerdown", reset, { once: true });
+  }
+
   thinkingToggle.addEventListener("click", () => {
-    const next = !getThinking();
-    setThinking(next);
-    void onThinkingChange?.(next);
+    if (thinkingToggle.getAttribute("aria-expanded") === "true") {
+      thinkingToggle.setAttribute("aria-expanded", "false");
+      closeContextMenu();
+      return;
+    }
+    openEffortMenu();
   });
+
+  /** 设置里保存或切换模型后，把输入栏的档位同步成保存值。 */
+  function setReasoningEffort(value) {
+    effort = value || "off";
+    renderEffort();
+  }
+
+  renderEffort();
 
   return {
     reset,
     focus: () => input.focus(),
     setText,
     setBusy,
-    setThinking,
-    getThinking,
+    setReasoningEffort,
+    getEffort: () => effort,
     getText: () => input.value,
   };
 }

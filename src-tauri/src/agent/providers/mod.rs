@@ -104,7 +104,8 @@ pub struct ProviderConfig {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
-    pub thinking: bool,
+    /// OpenAI 协议的推理强度：off / low / medium / high。
+    pub reasoning_effort: String,
 }
 
 pub enum StreamEvent {
@@ -279,6 +280,28 @@ impl ToolCallAccumulator {
     }
 }
 
+/// 按 OpenAI 的 chat/completions 协议拼请求体。
+/// 推理强度用标准的 reasoning_effort 字段，off 时不发送。
+fn build_body(
+    config: &ProviderConfig,
+    messages: Vec<ChatMessage>,
+    tools: Vec<ToolSpec>,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": config.model,
+        "messages": messages,
+        "stream": true,
+    });
+    if !tools.is_empty() {
+        body["tools"] = serde_json::to_value(&tools).unwrap_or_default();
+        body["tool_choice"] = serde_json::json!("auto");
+    }
+    if config.reasoning_effort != "off" {
+        body["reasoning_effort"] = serde_json::json!(config.reasoning_effort);
+    }
+    body
+}
+
 pub async fn stream_chat<F>(
     config: &ProviderConfig,
     messages: Vec<ChatMessage>,
@@ -291,18 +314,7 @@ where
     if config.api_key.trim().is_empty() && !is_local(config) {
         return Err(ProviderError::MissingApiKey);
     }
-    let mut body = serde_json::json!({
-        "model": config.model,
-        "messages": messages,
-        "stream": true,
-    });
-    if !tools.is_empty() {
-        body["tools"] = serde_json::to_value(&tools).unwrap_or_default();
-        body["tool_choice"] = serde_json::json!("auto");
-    }
-    if config.thinking {
-        body["thinking"] = serde_json::json!({ "type": "enabled" });
-    }
+    let body = build_body(config, messages, tools);
     {
         let preview = serde_json::to_string(&body).unwrap_or_default();
         let clipped: String = preview.chars().take(1200).collect();
@@ -527,8 +539,33 @@ mod tests {
             base_url: "http://localhost:11434/v1".into(),
             model: "qwen".into(),
             api_key: String::new(),
-            thinking: false,
+            reasoning_effort: "off".into(),
         };
         assert!(is_local(&config));
+    }
+
+    fn request_body(effort: &str) -> serde_json::Value {
+        let config = ProviderConfig {
+            base_url: "https://api.example.com/v1".into(),
+            model: "m".into(),
+            api_key: "sk".into(),
+            reasoning_effort: effort.into(),
+        };
+        super::build_body(&config, Vec::new(), Vec::new())
+    }
+
+    #[test]
+    fn effort_off_omits_the_field() {
+        assert!(request_body("off").get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn effort_levels_use_openai_reasoning_effort() {
+        for level in ["low", "medium", "high"] {
+            let body = request_body(level);
+            assert_eq!(body["reasoning_effort"], level, "{level}");
+            // 不能再出现 Anthropic 风格的私有字段
+            assert!(body.get("thinking").is_none(), "{level} 不应发送 thinking");
+        }
     }
 }

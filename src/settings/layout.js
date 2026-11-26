@@ -66,7 +66,13 @@ export function settingsViewHtml() {
             </div>
             <div class="setting-field">
               <label for="model-name">模型</label>
-              <input id="model-name" type="text" spellcheck="false" autocomplete="off" placeholder="deepseek-chat" />
+              <div class="key-row">
+                <input id="model-name" type="text" spellcheck="false" autocomplete="off" placeholder="deepseek-chat" />
+                <button class="plain-button test-button" id="model-scan" type="button" aria-haspopup="menu" aria-expanded="false">
+                  <span class="button-label">获取列表</span>
+                  <span class="button-spinner" aria-hidden="true"></span>
+                </button>
+              </div>
             </div>
           </div>
           <div class="setting-field">

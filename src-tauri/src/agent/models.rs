@@ -30,8 +30,27 @@ pub struct ModelConfig {
     model: String,
     #[serde(default)]
     api_key: String,
+    /// OpenAI 协议的推理强度：off / low / medium / high。
     #[serde(default)]
+    reasoning_effort: String,
+    /// 旧版本的开关，只在读取老配置时用来迁移，不再写回。
+    #[serde(default, skip_serializing)]
     thinking: bool,
+}
+
+pub const REASONING_LEVELS: [&str; 4] = ["off", "low", "medium", "high"];
+
+/// 把旧配置里的布尔开关换算成推理强度；已经是新字段的原样保留。
+fn normalize_effort(effort: &str, legacy_thinking: bool) -> String {
+    let trimmed = effort.trim().to_ascii_lowercase();
+    if REASONING_LEVELS.contains(&trimmed.as_str()) {
+        return trimmed;
+    }
+    if legacy_thinking {
+        "medium".into()
+    } else {
+        "off".into()
+    }
 }
 
 impl Default for ModelConfig {
@@ -41,6 +60,7 @@ impl Default for ModelConfig {
             base_url: default_base_url(),
             model: default_model(),
             api_key: String::new(),
+            reasoning_effort: "off".into(),
             thinking: false,
         }
     }
@@ -52,7 +72,7 @@ pub struct ModelConfigView {
     provider: String,
     base_url: String,
     model: String,
-    thinking: bool,
+    reasoning_effort: String,
     has_api_key: bool,
     api_key_hint: String,
 }
@@ -75,7 +95,7 @@ impl From<&ModelConfig> for ModelConfigView {
             provider: config.provider.clone(),
             base_url: config.base_url.clone(),
             model: config.model.clone(),
-            thinking: config.thinking,
+            reasoning_effort: config.reasoning_effort.clone(),
             has_api_key: !config.api_key.is_empty(),
             api_key_hint: mask_key(&config.api_key),
         }
@@ -116,6 +136,10 @@ impl ModelSettings {
             .ok()
             .and_then(|path| fs::read(path).ok())
             .and_then(|bytes| serde_json::from_slice::<ModelConfig>(&bytes).ok())
+            .map(|mut config| {
+                config.reasoning_effort = normalize_effort(&config.reasoning_effort, config.thinking);
+                config
+            })
             .filter(|config| validate(config).is_ok())
             .unwrap_or_default();
         Self(Mutex::new(config))
@@ -126,7 +150,7 @@ pub struct RequestConfig {
     pub base_url: String,
     pub model: String,
     pub api_key: String,
-    pub thinking: bool,
+    pub reasoning_effort: String,
 }
 
 pub fn snapshot(app: &AppHandle) -> Result<RequestConfig, String> {
@@ -136,7 +160,7 @@ pub fn snapshot(app: &AppHandle) -> Result<RequestConfig, String> {
         base_url: config.base_url.clone(),
         model: config.model.clone(),
         api_key: config.api_key.clone(),
-        thinking: config.thinking,
+        reasoning_effort: config.reasoning_effort.clone(),
     })
 }
 
@@ -160,7 +184,7 @@ pub fn save_model_config(
     provider: String,
     base_url: String,
     model: String,
-    thinking: bool,
+    reasoning_effort: String,
     api_key: Option<String>,
     state: tauri::State<ModelSettings>,
 ) -> Result<ModelConfigView, String> {
@@ -169,7 +193,8 @@ pub fn save_model_config(
     next.provider = provider.trim().to_lowercase();
     next.base_url = base_url.trim().trim_end_matches('/').to_string();
     next.model = model.trim().to_string();
-    next.thinking = thinking;
+    next.reasoning_effort = normalize_effort(&reasoning_effort, false);
+    next.thinking = false;
     if let Some(key) = api_key {
         let key = key.trim();
         if !key.is_empty() {
@@ -177,6 +202,21 @@ pub fn save_model_config(
         }
     }
     validate(&next)?;
+    save_file(&app, &next)?;
+    *current = next.clone();
+    Ok(ModelConfigView::from(&next))
+}
+
+/// 只改推理强度，其余字段与密钥保持原样。
+#[tauri::command]
+pub fn set_reasoning_effort(
+    app: AppHandle,
+    effort: String,
+    state: tauri::State<ModelSettings>,
+) -> Result<ModelConfigView, String> {
+    let mut current = state.0.lock().map_err(|error| error.to_string())?;
+    let mut next = current.clone();
+    next.reasoning_effort = normalize_effort(&effort, false);
     save_file(&app, &next)?;
     *current = next.clone();
     Ok(ModelConfigView::from(&next))
@@ -204,6 +244,77 @@ fn shorten(text: &str, limit: usize) -> String {
         kept.push('…');
     }
     kept
+}
+
+/// 读取服务商提供的模型列表（OpenAI 兼容的 GET /v1/models）。
+/// 只返回名称，按字母序排好；不校验模型是否支持推理。
+#[tauri::command]
+pub async fn list_models(
+    provider: String,
+    base_url: String,
+    api_key: Option<String>,
+    state: tauri::State<'_, ModelSettings>,
+) -> Result<Vec<String>, String> {
+    let _ = provider;
+    let saved_key = state
+        .0
+        .lock()
+        .map(|config| config.api_key.clone())
+        .map_err(|error| error.to_string())?;
+    let key = pick_api_key(api_key, saved_key);
+    let base = base_url.trim().trim_end_matches('/');
+    if !(base.starts_with("https://") || base.starts_with("http://")) {
+        return Err("接口地址必须以 http:// 或 https:// 开头".into());
+    }
+    if key.is_empty() && !is_local_endpoint(base) {
+        return Err("尚未设置 API Key，请先填写再获取模型列表".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(TEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| format!("无法创建请求：{error}"))?;
+    let url = format!("{base}/models");
+    let mut request = client.get(&url);
+    if !key.is_empty() {
+        request = request.bearer_auth(&key);
+    }
+    let response = request.send().await.map_err(|error| {
+        if error.is_timeout() {
+            format!("连接超时（{TEST_TIMEOUT_SECS} 秒），请检查接口地址与网络")
+        } else {
+            format!("无法连接 {url}：{error}")
+        }
+    })?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!(
+            "获取模型列表失败（{}）：{}",
+            status.as_u16(),
+            crate::agent::providers::extract_error_message(&text)
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
+        "服务返回的内容不是 JSON，请确认接口地址指向 OpenAI 兼容服务".to_string()
+    })?;
+    let mut names: Vec<String> = value
+        .get("data")
+        .and_then(|data| data.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        return Err("服务没有返回任何模型".into());
+    }
+    Ok(names)
 }
 
 /// 表单里的密钥可能为空（界面显示的是掩码）；此时回落到已保存的密钥。
@@ -236,6 +347,7 @@ pub async fn test_model_config(
         base_url: base_url.trim().trim_end_matches('/').to_string(),
         model: model.trim().to_string(),
         api_key: key.clone(),
+        reasoning_effort: "off".into(),
         thinking: false,
     };
     validate(&candidate)?;
@@ -362,12 +474,66 @@ mod tests {
     }
 
     #[test]
+    fn legacy_thinking_flag_migrates_to_effort() {
+        assert_eq!(normalize_effort("", true), "medium");
+        assert_eq!(normalize_effort("", false), "off");
+        assert_eq!(normalize_effort("  HIGH ", false), "high");
+        assert_eq!(normalize_effort("bogus", false), "off");
+    }
+
+    #[test]
+    fn reasoning_effort_accepts_only_known_levels() {
+        for level in REASONING_LEVELS {
+            assert_eq!(normalize_effort(level, false), level);
+        }
+        assert_eq!(normalize_effort("max", false), "off");
+    }
+
+    #[test]
+    fn legacy_config_file_still_loads() {
+        // 老版本写出的文件只有 thinking 字段
+        let raw = r#"{
+            "provider": "deepseek",
+            "baseUrl": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+            "apiKey": "sk-x",
+            "thinking": true
+        }"#;
+        let mut config: ModelConfig = serde_json::from_str(raw).unwrap();
+        assert_eq!(config.reasoning_effort, "");
+        config.reasoning_effort = normalize_effort(&config.reasoning_effort, config.thinking);
+        assert_eq!(config.reasoning_effort, "medium");
+    }
+
+    #[test]
+    fn legacy_thinking_flag_is_not_written_back() {
+        let config = ModelConfig {
+            reasoning_effort: "high".into(),
+            thinking: true,
+            ..ModelConfig::default()
+        };
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["reasoningEffort"], "high");
+        assert!(value.get("thinking").is_none());
+    }
+
+    #[test]
+    fn empty_effort_means_off_for_the_request() {
+        let config = ModelConfig {
+            reasoning_effort: normalize_effort("", false),
+            ..ModelConfig::default()
+        };
+        assert_eq!(config.reasoning_effort, "off");
+    }
+
+    #[test]
     fn invalid_candidates_are_rejected_before_requesting() {
         let bad_scheme = ModelConfig {
             provider: "deepseek".into(),
             base_url: "api.deepseek.com".into(),
             model: "deepseek-chat".into(),
             api_key: "sk".into(),
+            reasoning_effort: "off".into(),
             thinking: false,
         };
         assert!(validate(&bad_scheme).is_err());

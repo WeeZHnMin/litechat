@@ -64,7 +64,7 @@ pub async fn send_chat(
         base_url: config.base_url,
         model: config.model,
         api_key: config.api_key,
-        thinking: config.thinking,
+        reasoning_effort: config.reasoning_effort,
     };
     let stored = {
         let storage = app.state::<Storage>();
