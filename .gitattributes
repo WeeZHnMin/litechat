@@ -1,0 +1,14 @@
+# 统一行尾：源码用 LF，避免跨平台 diff 噪音
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# 构建产物和依赖不参与 diff 统计
+pnpm-lock.yaml linguist-generated=true
+src-tauri/Cargo.lock linguist-generated=true
