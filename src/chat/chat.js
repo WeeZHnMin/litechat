@@ -193,6 +193,25 @@ export function appendMessage(message, { onResend, pending = false } = {}) {
     markAccepted() {
       element.classList.remove("message--pending");
     },
+    /**
+     * 这一轮结束仍没被读到：标成未送达，点感叹号可以重新发送。
+     * 重发走 onResend，和右键菜单里的「重新发送」同一条路径。
+     */
+    markUndelivered(onResend) {
+      element.classList.remove("message--pending");
+      element.classList.add("message--undelivered");
+      const badge = document.createElement("button");
+      badge.type = "button";
+      badge.className = "undelivered-badge";
+      badge.title = "这条消息没有被模型读到，点击重新发送";
+      badge.setAttribute("aria-label", "消息未送达，点击重新发送");
+      badge.textContent = "!";
+      badge.addEventListener("click", () => {
+        element.remove();
+        onResend?.(messageText(message));
+      });
+      element.append(badge);
+    },
   };
 }
 

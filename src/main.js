@@ -48,7 +48,21 @@ const runner = createConversationRunner({
   history,
   getConversationId: () => history.currentId,
   onBusyChange: (busy) => composer.setBusy(busy),
+  // 这一轮结束时还没被读到的消息：标出来，让用户点感叹号重发
+  onPendingSettled: (entries) => {
+    for (const entry of entries) {
+      entry.rendered?.markUndelivered?.((text) => void sendText(text));
+    }
+  },
 });
+
+/** 重新发送一条未送达的消息。 */
+async function sendText(text) {
+  if (!text) return;
+  const message = { role: "user", parts: [{ type: "text", text }] };
+  renderMessage(message);
+  await runner.send(message);
+}
 /** 等待模型读取的用户消息，按发送顺序配对 input-accepted 事件。 */
 const pendingMessages = [];
 window.addEventListener("litechat:input-accepted", () => {
@@ -100,7 +114,7 @@ window.addEventListener("litechat:send", async (event) => {
   }
   // 生成中：不打断当前轮，交给后端在下一段思考前注入
   if (runner.isBusy) {
-    const queued = await runner.queueDuringStream(message);
+    const queued = await runner.queueDuringStream(message, rendered);
     if (queued) {
       pendingMessages.push(rendered);
       // 落库交给这一轮的 finish 统一处理，保证「助手段 → 用户 → 助手段」的顺序

@@ -196,18 +196,12 @@ async fn run_turn(
         }
         // 上一段输出已结束、工具还没跑（或刚跑完）——此时插入用户新消息，
         // 让模型在下一段思考开始前就看见它，顺序天然正确。
-        for text in app.state::<QueuedInput>().take(&stream_id) {
-            let _ = app.emit(
-                "chat://input-accepted",
-                InputAcceptedPayload {
-                    stream_id: stream_id.clone(),
-                    text: text.clone(),
-                },
-            );
-            messages.push(ChatMessage::text("user", text));
-        }
+        drain_queued_input(&app, &stream_id, &mut messages);
         let calls = stream_once(&app, &provider, &messages, &specs, &stream_id).await?;
         if calls.is_empty() {
+            // 模型已给出最终答复。但用户可能是在这一轮进行中才发的消息，
+            // 那样它一直没被读到，补一轮让模型回应。
+            answer_late_input(&app, &provider, &mut messages, &stream_id).await?;
             return Ok(());
         }
         if executed + calls.len() > MAX_TOOL_CALLS {
@@ -309,6 +303,52 @@ async fn run_turn(
 
 pub fn repeats_of(seen: &[String], signature: &str) -> usize {
     seen.iter().filter(|item| item.as_str() == signature).count()
+}
+
+/// 把用户在这一轮里插入的消息取出来，按顺序追加为用户消息。
+/// 返回是否真的取到了内容。
+fn drain_queued_input(
+    app: &AppHandle,
+    stream_id: &str,
+    messages: &mut Vec<ChatMessage>,
+) -> bool {
+    let queued = app.state::<QueuedInput>().take(stream_id);
+    if queued.is_empty() {
+        return false;
+    }
+    for text in queued {
+        let _ = app.emit(
+            "chat://input-accepted",
+            InputAcceptedPayload {
+                stream_id: stream_id.to_string(),
+                text: text.clone(),
+            },
+        );
+        messages.push(ChatMessage::text("user", text));
+    }
+    true
+}
+
+/// 模型已经写完最终答复后才到达的用户消息：再请求一次让它回应。
+/// 最多循环几轮，避免用户连续输入时无限延长。
+async fn answer_late_input(
+    app: &AppHandle,
+    provider: &ProviderConfig,
+    messages: &mut Vec<ChatMessage>,
+    stream_id: &str,
+) -> Result<(), String> {
+    const MAX_LATE_ROUNDS: usize = 3;
+    for _ in 0..MAX_LATE_ROUNDS {
+        if !is_active(app, stream_id) {
+            return Ok(());
+        }
+        if !drain_queued_input(app, stream_id, messages) {
+            return Ok(());
+        }
+        // 这一轮只用来回应插话，不再允许调工具，避免又拖出长链条
+        stream_once(app, provider, messages, &[], stream_id).await?;
+    }
+    Ok(())
 }
 
 async fn wrap_up(
@@ -464,6 +504,16 @@ mod tests {
         assert!(queue.take("s1").is_empty());
     }
 
+    #[test]
+    fn late_input_drain_reports_whether_anything_was_there() {
+        // answer_late_input 靠这个返回值决定要不要再请求一轮
+        let queue = QueuedInput::default();
+        assert!(queue.take("s1").is_empty());
+        queue.push("s1", "迟到的话".into());
+        assert_eq!(queue.take("s1"), vec!["迟到的话"]);
+        // 只取一次，第二轮不会再触发请求
+        assert!(queue.take("s1").is_empty());
+    }
     #[test]
     fn input_accepted_payload_uses_camel_case() {
         let value = serde_json::to_value(InputAcceptedPayload {
