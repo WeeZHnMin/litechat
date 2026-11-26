@@ -7,6 +7,7 @@ src/
 ├── app/                     应用外壳与页面框架
 │   ├── shell.js             渲染整个 DOM 骨架（标题栏 / 会话区 / 各面板 / 输入区）
 │   ├── views.js             视图基类：View / PanelView / ChatView / ViewManager
+│   ├── icons.js             图标 SVG 片段
 │   ├── window-controls.js   标题栏按钮：最小化、置顶、新对话
 │   └── demo.js              ?demo=1 时的富消息演示数据
 │
@@ -23,7 +24,10 @@ src/
 │
 ├── settings/                设置
 │   ├── settings.js          设置面板：快捷键配置
-│   └── model-settings.js    模型 API 配置：服务商、地址、模型、密钥、深度思考
+│   ├── layout.js            设置页 DOM 布局
+│   ├── mcp-settings.js      MCP 服务管理：增删、启停、重连、状态
+│   ├── workspace-settings.js 工作目录选择
+│   └── model-settings.js    模型 API 配置：服务商、地址、模型、密钥、深度思考、连接测试
 │
 ├── ui/                      通用可复用组件
 │   ├── context-menu.js      自定义右键菜单 + 全局默认菜单拦截

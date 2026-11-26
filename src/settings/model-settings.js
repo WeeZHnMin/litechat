@@ -15,7 +15,6 @@ const PRESETS = [
     model: "deepseek-reasoner",
     provider: "deepseek",
     baseUrl: "https://api.deepseek.com/v1",
-    thinking: true,
   },
   {
     label: "Qwen 2.5 7B",
@@ -45,10 +44,11 @@ const CSS = {
   keyHint: "#model-key-hint",
   keyClear: "#model-key-clear",
   presetTrigger: "#model-preset-trigger",
+  test: "#model-test",
+  testResult: "#model-test-result",
   save: "#model-save",
   error: "#model-error",
   path: "#model-config-path",
-  thinking: "#model-thinking",
 };
 
 export function initModelSettings({ onThinkingChange } = {}) {
@@ -60,16 +60,18 @@ export function initModelSettings({ onThinkingChange } = {}) {
     keyHint: document.querySelector(CSS.keyHint),
     keyClear: document.querySelector(CSS.keyClear),
     presetTrigger: document.querySelector(CSS.presetTrigger),
+    test: document.querySelector(CSS.test),
+    testResult: document.querySelector(CSS.testResult),
     save: document.querySelector(CSS.save),
     error: document.querySelector(CSS.error),
     path: document.querySelector(CSS.path),
-    thinking: document.querySelector(CSS.thinking),
   };
   const view = document.querySelector("#settings-view");
 
   let saved = null;
   let dirty = false;
   let loading = false;
+  let testing = false;
   let feedbackTimer = 0;
 
   function setFeedback(text, isError) {
@@ -85,11 +87,24 @@ export function initModelSettings({ onThinkingChange } = {}) {
     }
   }
 
+  function setTestResult(text, state = "ok") {
+    el.testResult.hidden = !text;
+    el.testResult.textContent = text || "";
+    el.testResult.classList.toggle("is-error", state === "error");
+    el.testResult.classList.toggle("is-ok", state === "ok");
+  }
+
+  function setTesting(value) {
+    testing = value;
+    el.test.disabled = value;
+    el.test.classList.toggle("is-testing", value);
+    el.test.setAttribute("aria-busy", String(value));
+  }
+
   function applyPreset(preset) {
     el.model.value = preset.model;
     el.provider.value = preset.provider;
     el.baseUrl.value = preset.baseUrl;
-    if (preset.thinking !== undefined) el.thinking.checked = preset.thinking;
     dirty = true;
     setFeedback("", false);
   }
@@ -121,7 +136,6 @@ export function initModelSettings({ onThinkingChange } = {}) {
     el.provider.value = next.provider;
     el.baseUrl.value = next.baseUrl;
     el.model.value = next.model;
-    el.thinking.checked = Boolean(next.thinking);
     el.apiKey.type = "text";
     el.apiKey.value = next.hasApiKey ? next.apiKeyHint : "";
     el.apiKey.dataset.masked = String(next.hasApiKey);
@@ -137,7 +151,6 @@ export function initModelSettings({ onThinkingChange } = {}) {
       el.provider.value !== saved.provider ||
       el.baseUrl.value.trim() !== saved.baseUrl ||
       el.model.value.trim() !== saved.model ||
-      el.thinking.checked !== Boolean(saved.thinking) ||
       (el.apiKey.dataset.masked !== "true" && el.apiKey.value.trim() !== "")
     );
   }
@@ -172,15 +185,47 @@ export function initModelSettings({ onThinkingChange } = {}) {
     }
   }
 
+  async function test() {
+    if (testing) return;
+    if (!el.baseUrl.value.trim() || !el.model.value.trim()) {
+      setTestResult("请先填写接口地址和模型名称", "error");
+      return;
+    }
+    setFeedback("", false);
+    setTestResult("", "ok");
+    setTesting(true);
+    try {
+      const result = await invoke("test_model_config", {
+        provider: el.provider.value,
+        baseUrl: el.baseUrl.value.trim(),
+        model: el.model.value.trim(),
+        apiKey: currentApiKey(),
+      });
+      setFeedback("", false);
+      const seconds = (result.elapsedMs / 1000).toFixed(1);
+      setTestResult(
+        `连接成功 · ${seconds} 秒 · 模型 ${result.model} 回复「${result.reply}」`,
+        "ok",
+      );
+    } catch (error) {
+      setFeedback("", false);
+      setTestResult(String(error), "error");
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function save() {
     setFeedback("", false);
+    setTestResult("", "ok");
     el.save.disabled = true;
     try {
       const next = await invoke("save_model_config", {
         provider: el.provider.value,
         baseUrl: el.baseUrl.value.trim(),
         model: el.model.value.trim(),
-        thinking: el.thinking.checked,
+        // 深度思考由输入栏的开关控制，这里保存时保持原状，不要覆盖
+        thinking: Boolean(saved?.thinking),
         apiKey: currentApiKey(),
       });
       applyView(next);
@@ -213,7 +258,9 @@ export function initModelSettings({ onThinkingChange } = {}) {
   el.apiKey.addEventListener("focus", clearMask);
   el.apiKey.addEventListener("pointerdown", clearMask);
   el.apiKey.addEventListener("input", markDirty);
-  el.thinking.addEventListener("change", markDirty);
+  el.baseUrl.addEventListener("input", () => setTestResult("", "ok"));
+  el.model.addEventListener("input", () => setTestResult("", "ok"));
+  el.provider.addEventListener("change", () => setTestResult("", "ok"));
   el.apiKey.addEventListener("blur", () => {
     if (el.apiKey.dataset.masked === "false" && !el.apiKey.value.trim() && saved?.hasApiKey) {
       el.apiKey.value = saved.apiKeyHint;
@@ -224,6 +271,7 @@ export function initModelSettings({ onThinkingChange } = {}) {
   });
 
   el.save.addEventListener("click", save);
+  el.test.addEventListener("click", () => void test());
   el.apiKey.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.isComposing) {
       event.preventDefault();

@@ -36,6 +36,7 @@ export class HistoryView extends PanelView {
 
   activate() {
     super.activate();
+    this.#list.focus({ preventScroll: true });
     void this.refresh();
   }
 

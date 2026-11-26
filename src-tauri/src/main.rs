@@ -42,6 +42,7 @@ fn main() {
             agent::models::save_model_config,
             agent::models::clear_model_api_key,
             agent::models::model_config_path,
+            agent::models::test_model_config,
             agent::chat::send_chat,
             agent::chat::cancel_stream,
             tools::mcp::commands::get_mcp_servers,

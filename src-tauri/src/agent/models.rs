@@ -182,6 +182,133 @@ pub fn save_model_config(
     Ok(ModelConfigView::from(&next))
 }
 
+const TEST_TIMEOUT_SECS: u64 = 20;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTestResult {
+    pub elapsed_ms: u64,
+    pub model: String,
+    pub reply: String,
+}
+
+fn is_local_endpoint(base_url: &str) -> bool {
+    let base = base_url.to_ascii_lowercase();
+    base.contains("localhost") || base.contains("127.0.0.1") || base.contains("0.0.0.0")
+}
+
+fn shorten(text: &str, limit: usize) -> String {
+    let trimmed = text.trim();
+    let mut kept: String = trimmed.chars().take(limit).collect();
+    if trimmed.chars().count() > limit {
+        kept.push('…');
+    }
+    kept
+}
+
+/// 表单里的密钥可能为空（界面显示的是掩码）；此时回落到已保存的密钥。
+fn pick_api_key(typed: Option<String>, saved: String) -> String {
+    typed
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(saved)
+}
+
+/// 用当前表单里的配置发一次最小请求，确认地址、模型名和密钥都能用。
+/// 只做连通性验证，不写入配置，也不开启思考模式，尽量少消耗额度。
+#[tauri::command]
+pub async fn test_model_config(
+    provider: String,
+    base_url: String,
+    model: String,
+    api_key: Option<String>,
+    state: tauri::State<'_, ModelSettings>,
+) -> Result<ModelTestResult, String> {
+    let saved_key = state
+        .0
+        .lock()
+        .map(|config| config.api_key.clone())
+        .map_err(|error| error.to_string())?;
+    let key = pick_api_key(api_key, saved_key);
+
+    let candidate = ModelConfig {
+        provider: provider.trim().to_lowercase(),
+        base_url: base_url.trim().trim_end_matches('/').to_string(),
+        model: model.trim().to_string(),
+        api_key: key.clone(),
+        thinking: false,
+    };
+    validate(&candidate)?;
+    if key.is_empty() && !is_local_endpoint(&candidate.base_url) {
+        return Err("尚未设置 API Key，请先填写再测试".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(TEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| format!("无法创建请求：{error}"))?;
+    let body = serde_json::json!({
+        "model": candidate.model,
+        "messages": [{ "role": "user", "content": "你好" }],
+        "stream": false,
+        "max_tokens": 16,
+    });
+    let url = format!("{}/chat/completions", candidate.base_url);
+    let mut request = client.post(&url).json(&body);
+    if !key.is_empty() {
+        request = request.bearer_auth(&key);
+    }
+
+    let started = std::time::Instant::now();
+    eprintln!("[model-test] POST {url} model={}", candidate.model);
+    let response = request.send().await.map_err(|error| {
+        eprintln!("[model-test] 发送失败: {error}");
+        if error.is_timeout() {
+            format!("连接超时（{TEST_TIMEOUT_SECS} 秒），请检查接口地址与网络")
+        } else {
+            format!("无法连接 {url}：{error}")
+        }
+    })?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    eprintln!("[model-test] 响应 {status} 用时 {elapsed_ms}ms");
+
+    if !status.is_success() {
+        return Err(format!(
+            "请求失败（{}）：{}",
+            status.as_u16(),
+            crate::agent::providers::extract_error_message(&text)
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
+        "服务返回的内容不是 JSON，请确认接口地址指向 OpenAI 兼容服务".to_string()
+    })?;
+    let reply = value
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .unwrap_or("");
+    let used_model = value
+        .get("model")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&candidate.model)
+        .to_string();
+
+    Ok(ModelTestResult {
+        elapsed_ms,
+        model: used_model,
+        reply: if reply.trim().is_empty() {
+            "服务已响应".into()
+        } else {
+            shorten(reply, 60)
+        },
+    })
+}
+
 #[tauri::command]
 pub fn clear_model_api_key(
     app: AppHandle,
@@ -194,3 +321,63 @@ pub fn clear_model_api_key(
     *current = next.clone();
     Ok(ModelConfigView::from(&next))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_key_wins_and_blank_falls_back_to_saved() {
+        assert_eq!(pick_api_key(Some("  sk-new ".into()), "sk-old".into()), "sk-new");
+        assert_eq!(pick_api_key(Some("   ".into()), "sk-old".into()), "sk-old");
+        assert_eq!(pick_api_key(None, "sk-old".into()), "sk-old");
+        assert_eq!(pick_api_key(None, String::new()), "");
+    }
+
+    #[test]
+    fn local_endpoints_do_not_need_a_key() {
+        assert!(is_local_endpoint("http://localhost:11434/v1"));
+        assert!(is_local_endpoint("http://127.0.0.1:1234/v1"));
+        assert!(!is_local_endpoint("https://api.deepseek.com/v1"));
+    }
+
+    #[test]
+    fn test_result_serializes_camel_case() {
+        let value = serde_json::to_value(ModelTestResult {
+            elapsed_ms: 812,
+            model: "deepseek-chat".into(),
+            reply: "嗨".into(),
+        })
+        .unwrap();
+        assert_eq!(value["elapsedMs"], 812);
+        assert_eq!(value["model"], "deepseek-chat");
+        assert_eq!(value["reply"], "嗨");
+        assert!(value.get("elapsed_ms").is_none());
+    }
+
+    #[test]
+    fn short_replies_are_not_truncated() {
+        assert_eq!(shorten("  嗨  ", 60), "嗨");
+        assert_eq!(shorten("一二三四", 3), "一二三…");
+    }
+
+    #[test]
+    fn invalid_candidates_are_rejected_before_requesting() {
+        let bad_scheme = ModelConfig {
+            provider: "deepseek".into(),
+            base_url: "api.deepseek.com".into(),
+            model: "deepseek-chat".into(),
+            api_key: "sk".into(),
+            thinking: false,
+        };
+        assert!(validate(&bad_scheme).is_err());
+
+        let no_model = ModelConfig {
+            base_url: "https://api.deepseek.com/v1".into(),
+            model: "  ".into(),
+            ..bad_scheme
+        };
+        assert!(validate(&no_model).is_err());
+    }
+}
+

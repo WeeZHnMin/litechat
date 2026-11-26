@@ -97,8 +97,16 @@ button {
 .settings-view {
   flex: 1;
   min-height: 0;
-  padding: 0 18px 18px;
+  padding: 0;
   overflow-y: auto;
+}
+
+.settings-page {
+  display: flex;
+  max-width: 676px;
+  flex-direction: column;
+  margin: 0 auto;
+  padding: 0 18px 28px;
 }
 
 .history-view {
@@ -165,10 +173,18 @@ button {
   top: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   margin: 0 -18px;
-  padding: 18px 18px 10px;
+  padding: 20px 18px 12px;
   background: #fff;
+  isolation: isolate;
+}
+
+.settings-header h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
 }
 
 .settings-header::after {
@@ -179,28 +195,56 @@ button {
   left: 0;
   height: 1px;
   background: linear-gradient(#ededed, transparent);
+  pointer-events: none;
 }
 
-.settings-header h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+.settings-view:focus,
+.history-view:focus {
+  outline: none;
 }
 
 .settings-section {
-  margin-top: 24px;
+  margin-top: 22px;
+}
+
+.settings-section:first-of-type {
+  margin-top: 18px;
+}
+
+.settings-section-head {
+  margin-bottom: 8px;
 }
 
 .settings-section h2 {
-  margin: 0 0 4px;
-  font-size: 13px;
+  margin: 0 0 3px;
+  color: #333;
+  font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.1px;
 }
 
-.settings-section > p {
-  margin: 0 0 8px;
-  color: #999;
+.settings-section-head p {
+  margin: 0;
+  color: #9a9a9a;
   font-size: 10px;
+  line-height: 1.6;
+}
+
+.settings-card {
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  background: #fcfcfc;
+  overflow: hidden;
+}
+
+.settings-card--padded {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 14px 14px;
+}
+
+.settings-card--padded > .mcp-list {
+  margin-top: 10px;
 }
 
 .setting-row {
@@ -209,7 +253,7 @@ button {
   justify-content: space-between;
   gap: 16px;
   padding: 12px 0;
-  border-bottom: 1px solid #ededed;
+  border-bottom: 1px solid #f0f0f0;
 }
 
 .setting-row:last-child {
@@ -224,14 +268,32 @@ button {
 }
 
 .setting-copy strong {
-  font-size: 12px;
+  color: #2c2c2c;
+  font-size: 11.5px;
   font-weight: 500;
 }
 
 .setting-copy span,
 .setting-status {
-  color: #999;
+  color: #9a9a9a;
   font-size: 10px;
+  line-height: 1.5;
+}
+
+.setting-status--on {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #4b8a62;
+  font-size: 10px;
+}
+
+.setting-status--on::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .shortcut-key {
@@ -266,14 +328,20 @@ button {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .setting-field > label {
-  color: #666;
+  color: #6a6a6a;
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.2px;
+}
+
+.settings-field-grid {
+  display: grid;
+  gap: 0 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .setting-field input,
@@ -369,42 +437,62 @@ button {
   color: #b8863b;
 }
 
-.path-hint {
-  margin: 0 0 4px !important;
-  overflow: hidden;
-  color: #b0b0b0;
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .setting-field input.is-masked {
   color: #666;
   letter-spacing: 1px;
 }
 
-.setting-toggle {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 14px;
-  color: #333;
-  font-size: 11px;
-  cursor: pointer;
+.test-button {
+  gap: 7px;
 }
 
-.setting-toggle input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: #242424;
+.test-button .button-spinner {
+  display: none;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid #c4c4c4;
+  border-top-color: #555;
+  border-radius: 50%;
+  animation: test-spin 620ms linear infinite;
 }
 
-.setting-toggle .field-hint {
-  flex-basis: 100%;
-  padding-left: 20px;
+.test-button.is-testing {
+  border-color: #c8c8c8;
+  color: #777;
+  cursor: progress;
+}
+
+.test-button.is-testing .button-spinner {
+  display: inline-block;
+}
+
+@keyframes test-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.settings-note {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.settings-note[hidden] {
+  display: none;
+}
+
+.settings-note.is-ok {
+  color: #3f7d57;
+  background: #f1f8f3;
+}
+
+.settings-note.is-error {
+  color: #b04a4a;
+  background: #fdf3f3;
 }
 
 .model-actions {
@@ -413,6 +501,20 @@ button {
   align-items: center;
   gap: 8px;
   margin-top: 16px;
+}
+
+.model-actions .primary-button {
+  margin-left: auto;
+}
+
+.path-hint {
+  margin: 12px 0 0;
+  overflow: hidden;
+  color: #b0b0b0;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .preset-trigger {
@@ -651,7 +753,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .mcp-row {
@@ -790,6 +892,11 @@ button {
 
 .primary-button:hover {
   background: #3a3a3a;
+}
+
+.settings-error[hidden],
+.settings-note[hidden] {
+  display: none;
 }
 
 .primary-button:disabled {
@@ -1052,7 +1159,18 @@ button {
     box-shadow: 0 3px 16px rgb(0 0 0 / 24%);
   }
 
-  .setting-row { border-bottom-color: #303131; }
+  .setting-row { border-bottom-color: #2a2b2b; }
+  .settings-section h2 { color: #e4e4e4; }
+  .settings-section-head p { color: #7d7d7d; }
+  .settings-card { border-color: #2a2b2b; background: #121313; }
+  .settings-card > .setting-row { border-bottom-color: #222323; }
+  .setting-copy strong { color: #e2e2e2; }
+  .setting-copy span, .setting-status { color: #7d7d7d; }
+  .setting-status--on { color: #6fbd8b; }
+  .settings-note.is-ok { color: #8ac7a1; background: #16211a; }
+  .settings-note.is-error { color: #e08585; background: #231718; }
+  .test-button.is-testing { border-color: #4a4b4b; color: #999; }
+  .test-button .button-spinner { border-color: #4a4b4b; border-top-color: #ddd; }
   .history-item.is-selected { border-color: #3a3b3b; background: #222323; }
   .shortcut-key { border-color: #3b3c3c; color: #ddd; background: #242525; }
   .context-menu { border-color: #333434; background: #1b1c1c; box-shadow: 0 8px 24px rgb(0 0 0 / 45%); }
@@ -1069,8 +1187,6 @@ button {
   .setting-field input:focus,
   .setting-field select:focus { border-color: #666; background: #242525; }
   .setting-field > label { color: #aaa; }
-  .setting-toggle { color: #ddd; }
-  .setting-toggle input { accent-color: #f1f1f1; }
   .preset-trigger[aria-expanded="true"] { border-color: #777; color: #eee; background: #303131; }
   .plain-button { border-color: #3b3c3c; color: #ccc; background: #242525; }
   .plain-button:hover { border-color: #777; background: #303131; }
@@ -1129,6 +1245,14 @@ button {
   .settings-view,
   .history-view {
     padding: 0 14px 14px;
+  }
+
+  .settings-view {
+    padding: 0;
+  }
+
+  .settings-page {
+    padding: 0 14px 20px;
   }
 
   .settings-header {

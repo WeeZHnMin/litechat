@@ -36,7 +36,9 @@ export class PanelView extends View {
   activate() {
     this.element.hidden = false;
     this.toggleButton?.setAttribute("aria-expanded", "true");
-    (this.initialFocus ?? this.element).focus?.();
+    // 面板里多为表单：聚焦第一个可交互元素会立刻画出焦点环，也容易让人以为
+    // 该控件已被选中。只在面板本身可聚焦时把焦点交给它，方向键/滚动仍然可用。
+    this.element.focus({ preventScroll: true });
   }
 
   deactivate() {

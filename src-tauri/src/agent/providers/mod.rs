@@ -133,7 +133,7 @@ impl ProviderError {
     }
 }
 
-fn extract_error_message(body: &str) -> String {
+pub(crate) fn extract_error_message(body: &str) -> String {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         return "服务未返回错误详情".into();
