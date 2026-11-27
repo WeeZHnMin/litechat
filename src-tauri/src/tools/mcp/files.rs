@@ -119,6 +119,20 @@ const TOOLS: &str = r#"[
     }
   },
   {
+    "name": "render_pdf_pages",
+    "description": "把 PDF 的指定页面渲染成图片，让你能像看截图一样看到版面、图表和扫描件。文字内容请先用 read_document；只有当文字提取不理想（扫描件、图文混排、需要看排版或图表）时才用这个。渲染后会立即作为图片出现在下一步，无需再调 read_media_file。一次最多 8 页，默认 150 DPI。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "相对于工作目录的 PDF 路径" },
+        "start_page": { "type": "integer", "description": "起始页码，从 1 开始。省略则从第 1 页" },
+        "end_page": { "type": "integer", "description": "结束页码（含）。省略则只渲染起始页" },
+        "dpi": { "type": "integer", "description": "渲染分辨率，默认 150。调高更清晰但更耗 token" }
+      },
+      "required": ["path"]
+    }
+  },
+  {
     "name": "read_media_file",
     "description": "加载一张图片，使其真正出现在对话里供你查看内容。只用于已经存在的图片文件（例如 extract_pdf_images 导出的结果）。调用后这张图会在下一步可见，可以据此描述或分析。",
     "inputSchema": {
@@ -146,12 +160,11 @@ pub fn tool_names() -> Vec<&'static str> {
         "read_binary_info",
         "read_document",
         "extract_pdf_images",
+        "render_pdf_pages",
         "read_media_file",
     ]
 }
 
-/// 读取文档并抽取文字。体积上限比 read_file 宽松得多，
-/// 因为 PDF/Excel 本身就不小。
 fn read_document(root: &Path, args: &Value) -> Result<String, String> {
     const MAX_DOC_BYTES: u64 = 32 * 1024 * 1024;
     let path = args
@@ -588,14 +601,11 @@ fn search(root: &Path, args: &Value) -> Result<String, String> {
     ))
 }
 
-/// 工具执行时能影响对话的地方（目前只有「把图片挂进下一步」）。
-/// 实现必须能跨 await 传递，因为工具调用是异步的。
+/// 实现必须 Send + Sync：工具调用是异步的。
 pub trait MediaSink: Send + Sync {
-    /// 把一张图片排进待发送队列，下一步会作为用户消息里的图片出现。
     fn attach_image(&self, path: &str) -> Result<(), String>;
 }
 
-/// 不加载图片的调用，仅供测试使用。
 #[cfg(test)]
 pub fn call(root: &Path, tool: &str, args: &Value) -> Result<String, String> {
     call_with(root, tool, args, None)
@@ -617,6 +627,7 @@ pub fn call_with(
         "read_binary_info" => read_binary_info(root, args),
         "read_document" => read_document(root, args),
         "extract_pdf_images" => extract_pdf_images(root, args),
+        "render_pdf_pages" => render_pdf_pages(root, args, media),
         "read_media_file" => read_media_file(root, args, media),
         other => Err(format!("未知文件工具: {other}")),
     }
@@ -649,6 +660,70 @@ fn extract_pdf_images(root: &Path, args: &Value) -> Result<String, String> {
     }
     for note in &extracted.notes {
         lines.push(note.clone());
+    }
+    Ok(lines.join("\n"))
+}
+
+fn render_pdf_pages(
+    root: &Path,
+    args: &Value,
+    media: Option<&(dyn MediaSink + 'static)>,
+) -> Result<String, String> {
+    let Some(sink) = media else {
+        return Err("当前环境不支持把图片加载到对话".into());
+    };
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("缺少 path 参数")?;
+    let target = resolve(root, path)?;
+    let bytes = std::fs::read(&target).map_err(|error| format!("无法读取 {path}: {error}"))?;
+
+    let start = args.get("start_page").and_then(Value::as_u64).map(|v| v as u32);
+    let end = args.get("end_page").and_then(Value::as_u64).map(|v| v as u32);
+    let range = match (start, end) {
+        (Some(from), Some(to)) => Some((from, to)),
+        (Some(from), None) => Some((from, from)),
+        (None, Some(to)) => Some((1, to)),
+        (None, None) => None,
+    };
+    let dpi = args.get("dpi").and_then(Value::as_u64).map(|v| v as u32);
+
+    let total = crate::agent::pdf_text::page_count(&bytes)?;
+    let rendered = crate::agent::pdf_text::render_pages(&bytes, range, dpi)?;
+    if rendered.is_empty() {
+        return Err(format!("{path} 没有可渲染的页面（共 {total} 页）"));
+    }
+
+    let stem = target
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("document");
+    let dir = root
+        .join(crate::tools::mcp::uploads::UPLOAD_DIR)
+        .join(format!("{stem}_pages"));
+    std::fs::create_dir_all(&dir).map_err(|error| format!("无法创建图片目录：{error}"))?;
+
+    let mut lines = vec![format!(
+        "{path} 共 {total} 页，已渲染 {} 页，图片会在下一步出现：",
+        rendered.len()
+    )];
+    for page in &rendered {
+        let filename = format!("p{:03}.png", page.page);
+        let file = dir.join(&filename);
+        std::fs::write(&file, &page.png).map_err(|error| format!("写入图片失败：{error}"))?;
+        let relative_path = relative(root, &file);
+        sink.attach_image(&relative_path)?;
+        lines.push(format!(
+            "- 第 {} 页：{}（{}x{}）",
+            page.page, relative_path, page.width, page.height
+        ));
+    }
+    if rendered.len() as u32 >= crate::agent::pdf_text::MAX_RENDER_PAGES {
+        lines.push(format!(
+            "（单次最多渲染 {} 页，需要更多请再调用一次指定范围）",
+            crate::agent::pdf_text::MAX_RENDER_PAGES
+        ));
     }
     Ok(lines.join("\n"))
 }
@@ -848,7 +923,6 @@ mod tests {
     #[test]
     fn read_media_file_hands_the_image_to_the_sink() {
         let root = temp_root("media");
-        // 1x1 PNG
         let png = image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 4));
         png.save(root.join("a.png")).unwrap();
 

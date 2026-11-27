@@ -659,36 +659,61 @@
   white-space: nowrap;
 }
 
-/* 非图片附件：用扩展名色块表示类型，和消息区文件卡片保持一致的视觉语言。
-   高度与图片缩略图对齐（56px），一行里不会高低不一。 */
+/* 非图片附件：图标 + 文件名 + 类型·大小，圆角卡片，与图片缩略图等高 */
 .attachment-chip--file {
   height: 56px;
-  max-width: 190px;
-  padding: 0 10px 0 4px;
-  gap: 8px;
+  max-width: 240px;
+  padding: 0 8px 0 6px;
+  gap: 9px;
+  border: 1px solid #e8e8e8;
+  border-radius: 11px;
+  background: #fff;
 }
 
-.attachment-chip--file > .attachment-badge {
+.attachment-badge {
   display: flex;
-  width: 44px;
-  height: 44px;
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  border-radius: 7px;
-  color: #fff;
-  background: #6b7280;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
+  border-radius: 8px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
   text-transform: uppercase;
-  overflow: visible;
 }
 
-.attachment-chip--file > .attachment-name {
+.attachment-badge--pdf { color: #fff; background: #d9534f; }
+.attachment-badge--sheet { color: #fff; background: #2f8f4e; }
+.attachment-badge--doc { color: #fff; background: #2b5fb8; }
+.attachment-badge--slide { color: #fff; background: #c96a26; }
+.attachment-badge--archive { color: #fff; background: #8a6d3b; }
+.attachment-badge--image { color: #fff; background: #2b8fa8; }
+.attachment-badge--video { color: #fff; background: #8b4bb5; }
+.attachment-badge--audio { color: #fff; background: #b5663f; }
+.attachment-badge--text,
+.attachment-badge--plain { color: #556; background: #e9ebef; }
+.attachment-badge--script,
+.attachment-badge--code { color: #fff; background: #4a5568; }
+
+.attachment-meta {
+  display: flex;
   min-width: 0;
-  font-size: 10px;
-  color: #555;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attachment-meta > .attachment-name {
+  min-width: 0;
+  color: #222;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.attachment-meta > .attachment-sub {
+  color: #9a9a9a;
+  font-size: 9px;
 }
 
 .attachment-chip--file > button {
@@ -805,8 +830,11 @@
   .citation-number { color: #bbb; background: #303131; }
   .attachment-chip { color: #bbb; background: #303131; }
   .attachment-chip--image { background: #303131; }
-  .attachment-chip--file > .attachment-badge { color: #1d1e1e; background: #9aa0a6; }
-  .attachment-chip--file > .attachment-name { color: #ccc; }
+  .attachment-chip--file { border-color: #333434; background: #202121; }
+  .attachment-badge--text,
+  .attachment-badge--plain { color: #ccc; background: #34363a; }
+  .attachment-meta > .attachment-name { color: #e4e4e4; }
+  .attachment-meta > .attachment-sub { color: #777; }
   .attachment-chip--image > button { background: rgb(0 0 0 / 70%); }
   .attachment-chip:not(.attachment-chip--image) button { color: #8a8a8a; }
   .reasoning-block > summary { color: #6f6f6f; }

@@ -53,7 +53,6 @@ export function createConversationRunner({
       if (segment.length) {
         await history.record({ role: "assistant", parts: segment });
       }
-      // 只有真正被模型读到的消息才写进历史，没送达的留待用户重发
       const entry = interleaved[index];
       if (entry?.accepted) {
         await history.record(entry.message);
@@ -110,12 +109,10 @@ export function createConversationRunner({
       stream.done(options);
       const parts = stream.parts;
       setBusy(null);
-      // 这一轮结束时还挂着「等待读取」的消息，说明它们赶在最后一轮之后发出，
-      // 不会再被模型看到。标记成未送达，让用户自己决定是否重发。
+      // 结束时仍未被读到的消息标为未送达，由用户决定是否重发
       onPendingSettled?.(interleaved.filter((entry) => !entry.accepted));
       if (parts.length) {
-        // 被用户插话打断过的话，按「助手段 → 用户消息 → 助手段」的顺序落库，
-        // 重新加载才能和界面显示一致
+        // 被插话打断过：按「助手段 → 用户消息 → 助手段」的顺序落库
         void persistSplit(stream, parts, interleaved).then(() => drainQueue());
       } else {
         void drainQueue();
@@ -150,7 +147,6 @@ export function createConversationRunner({
     unlisten.push(
       await listen("chat://input-accepted", (event) => {
         if (event.payload?.streamId !== streamId) return;
-        // 按发送顺序认领：最早一条未被确认的就是它
         const entry = interleaved.find((item) => !item.accepted);
         if (entry) entry.accepted = true;
         window.dispatchEvent(
@@ -206,9 +202,8 @@ export function createConversationRunner({
     if (!text) return false;
     try {
       await invoke("queue_user_input", { streamId: current.streamId, text });
-      // 用户消息此刻已经上屏，把助手这一轮断开，后续内容才会排在它下面
+      // 断开当前轮，后续内容才会排在用户消息下面
       current.stream?.split?.();
-      // 记下插在第几段之后，落库时按同样顺序还原
       current.interleaved.push({ message, rendered });
       return true;
     } catch (error) {

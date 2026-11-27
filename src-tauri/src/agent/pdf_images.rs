@@ -1,23 +1,14 @@
-//! 从 PDF 里抠出内嵌图片。
-//!
-//! 只处理不用重新编码就能还原的格式：
-//! - `/DCTDecode` 的流内容就是完整的 JPEG 字节，直接写盘
-//! - `/FlateDecode` 的裸像素用 image crate 组装成 PNG
-//!
-//! 其余（JPXDecode、CCITTFaxDecode 等）跳过并记下来，不假装成功。
+//! 从 PDF 抠出内嵌图片：DCTDecode 的流本身就是 JPEG，FlateDecode 的裸像素
+//! 组装成 PNG；其余编码跳过并记下来。
 
 use std::path::{Path, PathBuf};
 
-/// 小于这个尺寸的直接跳过：多半是图标、分隔线、水印。
 const MIN_SIDE: u32 = 32;
-/// 单张图片体积上限，防止把巨大的扫描页全部导出。
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
-/// 一次最多导出这么多张，避免几百页的 PDF 撑爆磁盘。
 const MAX_IMAGES: usize = 30;
 
 #[derive(Debug, Clone)]
 pub struct ExtractedImage {
-    /// 相对工作目录的路径
     pub path: String,
     pub width: u32,
     pub height: u32,
@@ -33,7 +24,6 @@ impl ExtractedImage {
     }
 }
 
-/// 导出的结果。`skipped` 用来解释为什么有些图没出来。
 #[derive(Debug, Default)]
 pub struct ImageExtraction {
     pub images: Vec<ExtractedImage>,
@@ -47,7 +37,6 @@ fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         .map(|image| image.dimensions())
 }
 
-/// 把导出目录准备好，返回 `<uploads>/<stem>_images`。
 fn output_dir(root: &Path, source: &Path) -> Result<PathBuf, String> {
     let stem = source
         .file_stem()
@@ -66,7 +55,6 @@ fn relative(root: &Path, path: &Path) -> String {
         .unwrap_or_else(|_| path.display().to_string())
 }
 
-/// 从 PDF 字节里导出图片。`source` 用于生成输出目录名。
 pub fn extract(root: &Path, source: &Path, bytes: &[u8]) -> Result<ImageExtraction, String> {
     let doc = lopdf::Document::load_mem(bytes)
         .map_err(|error| format!("PDF 解析失败（{error}）"))?;
@@ -166,8 +154,6 @@ pub fn extract(root: &Path, source: &Path, bytes: &[u8]) -> Result<ImageExtracti
     Ok(result)
 }
 
-/// FlateDecode 的图：PDF 里存的是裸像素，按 ColorSpace 组装成 PNG。
-/// 只处理最常见的不带预测器的 8 位 DeviceRGB / DeviceGray。
 fn encode_flate_image(dict: &lopdf::Dictionary, data: &[u8]) -> Option<Vec<u8>> {
     use lopdf::Object;
 
@@ -193,7 +179,6 @@ fn encode_flate_image(dict: &lopdf::Dictionary, data: &[u8]) -> Option<Vec<u8>> 
             b"DeviceGray" | b"G" => 1,
             _ => return None,
         },
-        // [/ICCBased stream] 之类的间接形式，按三通道假设
         Object::Array(items) => match items.first().and_then(|item| item.as_name().ok()) {
             Some(b"DeviceRGB") => 3,
             Some(b"DeviceGray") => 1,
@@ -239,7 +224,6 @@ mod tests {
         dir
     }
 
-    /// 造一个只含一张 DCTDecode(JPEG) 图的最小 PDF。
     fn pdf_with_jpeg() -> Vec<u8> {
         // 1x1 的 JPEG
         const JPEG: &[u8] = &[
@@ -281,7 +265,6 @@ mod tests {
         let source = root.join("uploads").join("doc.pdf");
         std::fs::create_dir_all(source.parent().unwrap()).unwrap();
         let out = extract(&root, &source, &pdf_with_jpeg()).unwrap();
-        // 1x1 图会被 MIN_SIDE 过滤掉，这里只验证解析不报错
         assert!(out.images.is_empty() || out.images.len() == 1);
         let _ = std::fs::remove_dir_all(&root);
     }

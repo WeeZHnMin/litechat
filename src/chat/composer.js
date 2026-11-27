@@ -24,6 +24,44 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
   });
   observer.observe(composer);
 
+  const FILE_KINDS = [
+    { test: /^(pdf)$/i, kind: "PDF", tone: "pdf" },
+    { test: /^(xlsx?|csv|ods)$/i, kind: "Excel", tone: "sheet" },
+    { test: /^(docx?|odt|rtf)$/i, kind: "Word", tone: "doc" },
+    { test: /^(pptx?|odp)$/i, kind: "PPT", tone: "slide" },
+    { test: /^(zip|rar|7z|gz|tar)$/i, kind: "压缩包", tone: "archive" },
+    { test: /^(png|jpe?g|gif|webp|bmp|svg)$/i, kind: "图片", tone: "image" },
+    { test: /^(mp4|mov|avi|mkv|webm)$/i, kind: "视频", tone: "video" },
+    { test: /^(mp3|wav|flac|m4a|ogg)$/i, kind: "音频", tone: "audio" },
+    { test: /^(txt|md|log)$/i, kind: "文本", tone: "text" },
+    { test: /^(cmd|bat|ps1|sh)$/i, kind: "脚本", tone: "script" },
+  ];
+
+  const CODE_EXT = /^(js|mjs|cjs|ts|tsx|jsx|py|rs|go|java|kt|c|h|cpp|hpp|cs|php|rb|lua|sql|json|ya?ml|toml|xml|html|css)$/i;
+
+  /** 按扩展名判断文件类型，返回图标元素和类型名。 */
+  function describeFile(file) {
+    const extension = (file.name.split(".").pop() || "").toLowerCase();
+    const entry =
+      FILE_KINDS.find((item) => item.test.test(extension)) ??
+      (CODE_EXT.test(extension)
+        ? { kind: "代码", tone: "code" }
+        : { kind: extension ? extension.toUpperCase() : "文件", tone: "plain" });
+    const badge = document.createElement("span");
+    badge.className = `attachment-badge attachment-badge--${entry.tone}`;
+    badge.setAttribute("aria-hidden", "true");
+    badge.textContent = extension.slice(0, 4).toUpperCase() || "?";
+    return { badge, kind: entry.kind };
+  }
+
+  function formatFileSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "";
+    const units = ["B", "KB", "MB", "GB"];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / 1024 ** index;
+    return `${index === 0 ? value : value.toFixed(value < 10 ? 1 : 0)} ${units[index]}`;
+  }
+
   function renderAttachments() {
     for (const url of previewUrls.values()) URL.revokeObjectURL(url);
     previewUrls.clear();
@@ -46,18 +84,20 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
         thumb.addEventListener("click", () => showImagePreview(url, file.name, file.name));
         chip.append(thumb);
       } else {
-        // 非图片没有可渲染的内容，用扩展名徽标表示类型
-        const badge = document.createElement("span");
-        badge.className = "attachment-badge";
-        const extension = (file.name.split(".").pop() || "FILE").toUpperCase();
-        badge.textContent = extension.slice(0, 4);
-        badge.setAttribute("aria-hidden", "true");
+        const { badge, kind } = describeFile(file);
+        chip.classList.add("attachment-chip--file");
+        chip.append(badge);
+        const meta = document.createElement("span");
+        meta.className = "attachment-meta";
         const name = document.createElement("span");
         name.className = "attachment-name";
         name.textContent = file.name;
         name.title = file.name;
-        chip.classList.add("attachment-chip--file");
-        chip.append(badge, name);
+        const sub = document.createElement("span");
+        sub.className = "attachment-sub";
+        sub.textContent = [kind, formatFileSize(file.size)].filter(Boolean).join(" · ");
+        meta.append(name, sub);
+        chip.append(meta);
       }
 
       const remove = document.createElement("button");
@@ -124,7 +164,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
     return btoa(binary);
   }
 
-  // 单个附件上限，与后端 uploads 模块保持一致
   const MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 
   async function buildParts(text, files) {
@@ -146,12 +185,10 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
         parts.push(part);
         continue;
       }
-      // 只编码一次：图片要 base64 走多模态，文档要 base64 落盘
       const data = await fileToBase64(file);
       if (isImage) {
         part.data = data;
       } else {
-        // 文档存到工作目录，消息里只留路径；模型需要时用 read_document 读
         try {
           part.path = await invoke("save_attachment", { name: file.name, data });
         } catch (error) {
@@ -190,7 +227,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
     }
     const message = { role: "user", parts };
     const busy = composer.classList.contains("is-busy");
-    // 生成中发出的消息立刻上屏，并显示「等待模型读取」标记
     const rendered = appendMessage(message, { pending: busy });
     window.dispatchEvent(
       new CustomEvent("litechat:send", { detail: { text, files, message, rendered } }),
@@ -211,7 +247,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
       const file = await captureWithSnippingTool();
       if (file) addFiles([file]);
     } catch {
-      // 取消或失败时静默处理
     }
   }
 
@@ -325,7 +360,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
 
   function setBusy(busy) {
     composer.classList.toggle("is-busy", busy);
-    // 生成中也允许继续输入和发消息：消息会排队，等模型下一步思考前注入
     input.setAttribute("aria-busy", String(busy));
     input.placeholder = busy ? "继续输入，模型会在下一步看到…" : "发消息...";
     stopButton.hidden = !busy;

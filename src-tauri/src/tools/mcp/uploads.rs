@@ -1,14 +1,9 @@
-//! 上传附件的落盘与读取。
-//!
-//! 附件不直接塞进消息，而是存到工作目录下的 `uploads/`，消息里只留
-//! 文件路径和一行摘要。模型需要内容时调用 `read_document` 工具去读。
+//! 附件落盘到工作目录的 `uploads/`，消息里只留路径。
 
 use std::path::{Path, PathBuf};
 
-/// 附件存放目录（相对工作目录）。
 pub const UPLOAD_DIR: &str = "uploads";
 
-/// 单次上传体积上限。超过就不落盘，也不读取。
 pub const MAX_UPLOAD_BYTES: usize = 32 * 1024 * 1024;
 
 fn sanitize(name: &str) -> String {
@@ -33,7 +28,6 @@ fn sanitize(name: &str) -> String {
     }
 }
 
-/// 生成不冲突的落盘路径，同名文件加序号后缀。
 fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let candidate = dir.join(name);
     if !candidate.exists() {
@@ -52,7 +46,6 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{stem}-{}{ext}", uuid::Uuid::new_v4()))
 }
 
-/// 把附件写进工作目录的 uploads/ 下，返回相对工作目录的路径。
 pub fn save(root: &Path, name: &str, bytes: &[u8]) -> Result<String, String> {
     if bytes.is_empty() {
         return Err(format!("{name} 是空文件"));
@@ -75,7 +68,6 @@ pub fn save(root: &Path, name: &str, bytes: &[u8]) -> Result<String, String> {
     Ok(relative)
 }
 
-/// 把 `uploads/` 下同名旧文件清掉，避免越积越多。
 pub fn prune(root: &Path, keep: usize) {
     let dir = root.join(UPLOAD_DIR);
     let Ok(entries) = std::fs::read_dir(&dir) else {

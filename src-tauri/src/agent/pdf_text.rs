@@ -1,14 +1,7 @@
-//! PDF 文字提取，基于 PDFium（Chrome 同款引擎）。
+//! PDF 文字提取与页面渲染，基于 PDFium。
 //!
-//! 相比 pdf-extract，PDFium 完整支持中文 PDF 常见的 GBK-EUC-H 等 CMap，
-//! 也不会在遇到不支持的编码时 panic。
-//!
-//! DLL 位置：
-//! - 开发时：`src-tauri/libs/pdfium.dll`（随仓库提供）
-//! - 打包后：可执行文件同目录
-//!
-//! 用 `libs/pdfium.dll` 的 build 是 8125，必须与 pdfium-render 绑定的
-//! 版本表里的条目对应，否则 GetProcAddress 会失败。
+//! `libs/pdfium.dll` 的 build 号必须与 pdfium-render 的绑定版本表对应
+//! （当前 8125），否则 GetProcAddress 会失败。
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -17,26 +10,21 @@ use pdfium_render::prelude::*;
 
 const DLL_NAME: &str = "pdfium.dll";
 
-/// 单页最多取这么多字符，避免超长文档占满内存。
 const MAX_CHARS_PER_PAGE: usize = 20_000;
 
 fn dll_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            // Windows 安装版：DLL 与 exe 同目录
             candidates.push(dir.join(DLL_NAME));
-            // Tauri 打包的 resources 目录
             candidates.push(dir.join("resources").join(DLL_NAME));
         }
     }
-    // 开发时：源码目录下的 libs/
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     candidates.push(manifest.join("libs").join(DLL_NAME));
     candidates
 }
 
-/// 进程内只加载一次 PDFium。绑定失败时返回可读原因。
 fn pdfium() -> Result<&'static Pdfium, String> {
     static INSTANCE: OnceLock<Result<Pdfium, String>> = OnceLock::new();
     INSTANCE
@@ -59,7 +47,6 @@ fn pdfium() -> Result<&'static Pdfium, String> {
         .map_err(|error| error.clone())
 }
 
-/// 提取 PDF 全部文字。返回逐页文本。
 pub fn extract_text(bytes: &[u8]) -> Result<Vec<String>, String> {
     let pdfium = pdfium()?;
     let document = pdfium
@@ -81,6 +68,85 @@ pub fn extract_text(bytes: &[u8]) -> Result<Vec<String>, String> {
     Ok(pages)
 }
 
+pub const DEFAULT_DPI: u32 = 150;
+
+pub const MAX_RENDER_PAGES: u32 = 8;
+
+#[derive(Debug)]
+pub struct RenderedPage {
+    pub page: u32,
+    pub png: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub fn render_pages(
+    bytes: &[u8],
+    pages: Option<(u32, u32)>,
+    dpi: Option<u32>,
+) -> Result<Vec<RenderedPage>, String> {
+    let pdfium = pdfium()?;
+    let document = pdfium
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|error| format!("PDF 解析失败：{error}"))?;
+    let total = document.pages().len() as u32;
+    if total == 0 {
+        return Err("这份 PDF 没有页面".into());
+    }
+
+    let (start, end) = match pages {
+        Some((from, to)) => {
+            let from = from.max(1);
+            let to = to.max(from);
+            (from, to.min(total))
+        }
+        None => (1, total.min(3)),
+    };
+    if start > total {
+        return Err(format!("起始页码 {start} 超出范围（共 {total} 页）"));
+    }
+    let end = end.min(start + MAX_RENDER_PAGES - 1);
+
+    // 150/72 ≈ 2.083，PDF 的点是 1/72 英寸
+    let scale = dpi.unwrap_or(DEFAULT_DPI).clamp(50, 300) as f32 / 72.0;
+    let config = PdfRenderConfig::new().scale_page_by_factor(scale);
+
+    let mut rendered = Vec::new();
+    for page_number in start..=end {
+        let page = document
+            .pages()
+            .get(page_number as i32 - 1)
+            .map_err(|error| format!("读取第 {page_number} 页失败：{error}"))?;
+
+        let bitmap = page
+            .render_with_config(&config)
+            .map_err(|error| format!("渲染第 {page_number} 页失败：{error}"))?;
+        let image = bitmap
+            .as_image()
+            .map_err(|error| format!("转换第 {page_number} 页失败：{error}"))?;
+        let (width, height) = (image.width(), image.height());
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .map_err(|error| format!("编码第 {page_number} 页失败：{error}"))?;
+        rendered.push(RenderedPage {
+            page: page_number,
+            png,
+            width,
+            height,
+        });
+    }
+    Ok(rendered)
+}
+
+pub fn page_count(bytes: &[u8]) -> Result<u32, String> {
+    let pdfium = pdfium()?;
+    let document = pdfium
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|error| format!("PDF 解析失败：{error}"))?;
+    Ok(document.pages().len() as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,7 +162,6 @@ mod tests {
 
     #[test]
     fn missing_dll_is_reported_clearly() {
-        // 这里不覆盖真实 DLL，只验证错误文案包含文件名和位置提示
         let message = format!(
             "找不到 PDF 引擎文件 {DLL_NAME}。请确认它位于应用目录，或 {} 下",
             Path::new("x").display()

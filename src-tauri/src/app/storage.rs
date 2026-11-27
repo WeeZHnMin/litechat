@@ -194,33 +194,6 @@ pub fn append_message(
 }
 
 #[tauri::command]
-pub fn update_message(
-    message_id: String,
-    parts: serde_json::Value,
-    state: tauri::State<Storage>,
-) -> Result<(), String> {
-    if !parts.is_array() {
-        return Err("无效的消息内容".into());
-    }
-    let serialized = serde_json::to_string(&parts).map_err(|error| error.to_string())?;
-    let now = timestamp();
-    let connection = state.connection.lock().map_err(|error| error.to_string())?;
-    connection
-        .execute(
-            "UPDATE messages SET parts = ?1 WHERE id = ?2",
-            params![serialized, message_id],
-        )
-        .map_err(|error| error.to_string())?;
-    connection
-        .execute(
-            "UPDATE conversations SET updated_at = ?1 WHERE id = (SELECT conversation_id FROM messages WHERE id = ?2)",
-            params![now, message_id],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
 pub fn load_messages(
     conversation_id: String,
     state: tauri::State<Storage>,
@@ -228,16 +201,3 @@ pub fn load_messages(
     state.messages(&conversation_id)
 }
 
-#[tauri::command]
-pub fn delete_conversation(
-    conversation_id: String,
-    state: tauri::State<Storage>,
-) -> Result<(), String> {
-    state
-        .connection
-        .lock()
-        .map_err(|error| error.to_string())?
-        .execute("DELETE FROM conversations WHERE id = ?1", [conversation_id])
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}

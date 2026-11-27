@@ -1,4 +1,4 @@
-use crate::tools::mcp::{McpManager, McpServerConfig, McpServerStatus, McpToolInfo};
+use crate::tools::mcp::{McpManager, McpServerConfig, McpServerStatus};
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
@@ -65,11 +65,6 @@ pub fn set_workspace(app: AppHandle, path: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn get_mcp_servers(app: AppHandle) -> Result<Vec<McpServerStatus>, String> {
     Ok(app.state::<McpManager>().statuses().await)
-}
-
-#[tauri::command]
-pub async fn get_mcp_tools(app: AppHandle) -> Result<Vec<McpToolInfo>, String> {
-    Ok(app.state::<McpManager>().tools().await)
 }
 
 #[tauri::command]

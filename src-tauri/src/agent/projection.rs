@@ -11,8 +11,7 @@ pub const SYSTEM_PROMPT: &str = "你是一个乐于助人的助手。回答简�
 
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
-/// 用户上传的附件：只给路径和一行摘要，不把全文塞进消息。
-/// 模型需要内容时调用 `read_document` 读取，这样长文档不会撑爆上下文。
+/// 只给路径和摘要，内容由模型调 read_document 按需读取。
 fn document_parts(parts: &serde_json::Value) -> Vec<String> {
     let Some(items) = parts.as_array() else {
         return Vec::new();
@@ -25,7 +24,6 @@ fn document_parts(parts: &serde_json::Value) -> Vec<String> {
                 .get("name")
                 .and_then(|value| value.as_str())
                 .unwrap_or("附件");
-            // 前端判定超限时已经写好了说明
             if part.get("tooLarge").and_then(|value| value.as_bool()) == Some(true) {
                 return part
                     .get("text")
@@ -123,7 +121,6 @@ fn image_parts(parts: &serde_json::Value) -> Vec<ContentPart> {
 pub fn build_messages(stored: Vec<StorageMessage>) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage::text("system", SYSTEM_PROMPT)];
     for item in stored {
-        // 附件解析成文本后接在消息正文后面，模型才能真正读到内容
         let mut text = message_text(&item.parts);
         if item.role == "user" {
             let documents = document_parts(&item.parts);

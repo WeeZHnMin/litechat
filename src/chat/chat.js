@@ -152,7 +152,6 @@ export function appendMessage(message, { onResend, pending = false } = {}) {
   const element = document.createElement("article");
   element.className = `message message--${role}`;
   if (pending) element.classList.add("message--pending");
-  // 连续两条用户消息（中间没有助手回复）时收窄间距，视觉上归为一组
   const previous = getConversation().lastElementChild;
   if (role === "user" && previous?.classList.contains("message--user")) {
     element.classList.add("message--followup");
@@ -266,7 +265,6 @@ export function createAssistantStream() {
     if (parts.length) {
       finishedSegments.push(parts);
     } else {
-      // 这一段什么都没产出，别留个空壳在对话里
       element.remove();
     }
     ({ element, content } = appendMessage({ role: "assistant", parts: [] }));
@@ -401,7 +399,6 @@ export function createAssistantStream() {
     }
   };
 
-  // 被用户消息打断过的话，前面那些段落也要算进最终文本
   const settledText = () =>
     finishedSegments
       .flat()
@@ -457,7 +454,6 @@ export function createAssistantStream() {
       return allTools().map((entry) => entry.element);
     },
     get parts() {
-      // 被用户消息打断过的话，要按「段1 → 段2 → …」拼回完整时间线
       const merged = [...finishedSegments.flat(), ...timelineToParts(timeline)];
       return merged;
     },
@@ -469,7 +465,6 @@ export function createAssistantStream() {
       render(true);
       element.classList.remove("is-streaming");
       if (markInterrupted) element.classList.add("message--interrupted");
-      // 滚动到这一轮的开头，让用户从头读；中间被插话时去第一段那里
       const firstText = timeline.find((entry) => entry.kind === "text");
       scrollToAnchor(firstText?.element ?? content);
       return answerText();

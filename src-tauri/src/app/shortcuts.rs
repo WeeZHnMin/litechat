@@ -25,7 +25,6 @@ pub struct ShortcutFailure {
 
 pub struct ShortcutSettings {
     config: Mutex<ShortcutConfig>,
-    failures: Mutex<Vec<ShortcutFailure>>,
     suspended: Mutex<bool>,
 }
 
@@ -51,7 +50,6 @@ impl Default for ShortcutSettings {
     fn default() -> Self {
         Self {
             config: Mutex::new(ShortcutConfig::default()),
-            failures: Mutex::new(Vec::new()),
             suspended: Mutex::new(false),
         }
     }
@@ -143,7 +141,6 @@ pub fn register(app: &AppHandle) -> Result<(), String> {
     }
     let state = app.state::<ShortcutSettings>();
     *state.config.lock().map_err(|error| error.to_string())? = config;
-    *state.failures.lock().map_err(|error| error.to_string())? = failures;
     Ok(())
 }
 
@@ -191,17 +188,6 @@ pub fn get_shortcuts(state: tauri::State<ShortcutSettings>) -> Result<ShortcutCo
         .config
         .lock()
         .map(|config| config.clone())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn get_shortcut_failures(
-    state: tauri::State<ShortcutSettings>,
-) -> Result<Vec<ShortcutFailure>, String> {
-    state
-        .failures
-        .lock()
-        .map(|failures| failures.clone())
         .map_err(|error| error.to_string())
 }
 
@@ -277,8 +263,5 @@ pub fn update_shortcut(
         return Err(error);
     }
     *config = next.clone();
-    if let Ok(mut failures) = state.failures.lock() {
-        failures.clear();
-    }
     Ok(next)
 }

@@ -1,23 +1,12 @@
-//! 把上传的附件转成模型能读的纯文本。
-//!
-//! 分两类：
-//! - 纯文本类（txt / md / 代码 / .cmd / .bat）直接按 UTF-8 读出
-//! - 容器类（xlsx / xls / pdf / docx）需要各自解析
-//!
-//! 解析失败一律给出可操作的原因，不做静默降级——模型和用户都应该知道
-//! 「这份文件没被读到」，而不是以为看到了全部内容。
 
 use std::io::Read;
 
-/// 单个附件最多抽这么多字符，超出截断。约 1 万汉字。
 pub const MAX_TEXT_CHARS: usize = 12_000;
 
-/// 附件解析结果。`notes` 用来告诉模型「哪里没拿到」。
 #[derive(Debug, Default)]
 pub struct Extracted {
     pub text: String,
     pub notes: Vec<String>,
-    /// 识别出来的格式，用于在消息里标注
     pub kind: String,
 }
 
@@ -30,7 +19,6 @@ impl Extracted {
         }
     }
 
-    /// 拼成最终交给模型的一段文本。
     pub fn render(&self, name: &str) -> String {
         let mut out = format!("【附件：{name}（{}）】", self.kind);
         if self.text.trim().is_empty() {
@@ -70,7 +58,6 @@ fn is_text_ext(ext: &str) -> bool {
     )
 }
 
-/// 按扩展名解析附件。`bytes` 是完整文件内容。
 pub fn extract(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
     let ext = name
         .rsplit_once('.')
@@ -90,7 +77,6 @@ pub fn extract(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
         )),
         ext if is_text_ext(ext) => read_plain(name, bytes),
         "" => {
-            // 没有扩展名时按内容判断，可能是纯文本脚本
             if looks_like_text(bytes) {
                 read_plain(name, bytes)
             } else {
@@ -132,7 +118,6 @@ fn read_plain(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
     Ok(result)
 }
 
-/// Windows 本地代码页解码。没有额外依赖时用 GBK 近似处理中文环境。
 #[cfg(windows)]
 fn decode_ansi(bytes: &[u8]) -> Option<String> {
     // UTF-16LE BOM
@@ -143,7 +128,6 @@ fn decode_ansi(bytes: &[u8]) -> Option<String> {
             .collect();
         return String::from_utf16(&units).ok();
     }
-    // 其余情况交给系统 API，避免自己实现 GBK 码表
     decode_with_system_codepage(bytes)
 }
 
@@ -255,7 +239,6 @@ fn format_number(value: f64) -> String {
 }
 
 fn read_pdf(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
-    // PDFium 对中文 PDF 的编码支持完整，不需要 catch_unwind 兜底
     let pages = crate::agent::pdf_text::extract_text(bytes)
         .map_err(|error| format!("{name}：{error}"))?;
 
@@ -274,7 +257,6 @@ fn read_pdf(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
         });
     }
 
-    // 逐页拼起来，带页码标记，方便模型引用
     let mut joined = String::new();
     for (index, page) in pages.iter().enumerate() {
         let trimmed = page.trim();
@@ -307,7 +289,6 @@ fn read_pdf(name: &str, bytes: &[u8]) -> Result<Extracted, String> {
     Ok(result)
 }
 
-/// 粗略判断 PDF 里有没有内嵌图片对象。
 fn contains_image_objects(bytes: &[u8]) -> bool {
     const NEEDLES: [&[u8]; 4] = [b"/Subtype/Image", b"/Subtype /Image", b"/DCTDecode", b"/JPXDecode"];
     NEEDLES
@@ -393,7 +374,6 @@ fn xml_to_text(xml: &str) -> String {
     compact.trim().to_string()
 }
 
-/// 还原 XML 实体。
 fn push_unescaped(out: &mut String, raw: &str) {
     let mut rest = raw;
     while let Some(index) = rest.find('&') {

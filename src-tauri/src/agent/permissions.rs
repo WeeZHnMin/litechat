@@ -177,14 +177,6 @@ impl Permissions {
         self.save();
     }
 
-    pub fn forget(&self, tool: &str) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.always_allowed.remove(tool);
-            inner.session_allowed.remove(tool);
-        }
-        self.save();
-    }
-
     pub fn allow_always(&self, tool: &str) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.always_allowed.insert(tool.to_string());
@@ -312,12 +304,6 @@ pub fn set_approval_mode(app: AppHandle, mode: ApprovalMode) -> Result<Permissio
     let state = app.state::<Permissions>();
     state.set_mode(mode);
     Ok(state.state())
-}
-
-#[tauri::command]
-pub fn reset_tool_permission(app: AppHandle, tool: String) -> Result<(), String> {
-    app.state::<Permissions>().forget(&tool);
-    Ok(())
 }
 
 #[cfg(test)]

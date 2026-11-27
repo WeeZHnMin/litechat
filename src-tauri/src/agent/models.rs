@@ -40,7 +40,6 @@ pub struct ModelConfig {
 
 pub const REASONING_LEVELS: [&str; 4] = ["off", "low", "medium", "high"];
 
-/// 把旧配置里的布尔开关换算成推理强度；已经是新字段的原样保留。
 fn normalize_effort(effort: &str, legacy_thinking: bool) -> String {
     let trimmed = effort.trim().to_ascii_lowercase();
     if REASONING_LEVELS.contains(&trimmed.as_str()) {
@@ -207,7 +206,6 @@ pub fn save_model_config(
     Ok(ModelConfigView::from(&next))
 }
 
-/// 只改推理强度，其余字段与密钥保持原样。
 #[tauri::command]
 pub fn set_reasoning_effort(
     app: AppHandle,
@@ -246,8 +244,6 @@ fn shorten(text: &str, limit: usize) -> String {
     kept
 }
 
-/// 读取服务商提供的模型列表（OpenAI 兼容的 GET /v1/models）。
-/// 只返回名称，按字母序排好；不校验模型是否支持推理。
 #[tauri::command]
 pub async fn list_models(
     provider: String,
@@ -317,7 +313,6 @@ pub async fn list_models(
     Ok(names)
 }
 
-/// 表单里的密钥可能为空（界面显示的是掩码）；此时回落到已保存的密钥。
 fn pick_api_key(typed: Option<String>, saved: String) -> String {
     typed
         .map(|value| value.trim().to_string())
@@ -325,8 +320,6 @@ fn pick_api_key(typed: Option<String>, saved: String) -> String {
         .unwrap_or(saved)
 }
 
-/// 用当前表单里的配置发一次最小请求，确认地址、模型名和密钥都能用。
-/// 只做连通性验证，不写入配置，也不开启思考模式，尽量少消耗额度。
 #[tauri::command]
 pub async fn test_model_config(
     provider: String,
@@ -488,7 +481,6 @@ mod tests {
 
     #[test]
     fn legacy_config_file_still_loads() {
-        // 老版本写出的文件只有 thinking 字段
         let raw = r#"{
             "provider": "deepseek",
             "baseUrl": "https://api.deepseek.com/v1",

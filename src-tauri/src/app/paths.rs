@@ -37,7 +37,6 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 const WORKSPACE_FILE: &str = "workspace.txt";
 
-/// 文件工具的默认工作目录，放在应用数据目录下单独的子目录里。
 /// 不直接用 `.litechat/` 本身，避免模型误碰配置和数据库。
 const DEFAULT_WORKSPACE_DIR: &str = "workspace";
 
@@ -46,14 +45,12 @@ fn workspace_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn default_workspace() -> PathBuf {
-    // 优先用用户主目录，拿不到再退回临时目录
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// 工作目录：用户显式设置过就用那个，否则落到应用数据目录下的 workspace/。
 pub fn workspace(app: &AppHandle) -> PathBuf {
     workspace_path(app)
         .ok()
@@ -67,7 +64,6 @@ pub fn workspace(app: &AppHandle) -> PathBuf {
         })
 }
 
-/// 确保默认工作目录存在，供启动时调用。
 pub fn ensure_workspace(app: &AppHandle) -> Result<PathBuf, String> {
     let path = workspace(app);
     fs::create_dir_all(&path).map_err(|error| error.to_string())?;
@@ -115,14 +111,12 @@ mod tests {
 
     #[test]
     fn default_workspace_dir_is_not_the_config_dir_itself() {
-        // 工作目录和配置/数据库要分开，避免模型误碰 .litechat 里的文件
         assert_ne!(DEFAULT_WORKSPACE_DIR, "");
         assert!(DEFAULT_WORKSPACE_DIR.contains("workspace"));
     }
 
     #[test]
     fn workspace_lives_under_config_dir() {
-        // 没有 workspace.txt 时，路径 = <config_dir>/workspace
         let config = PathBuf::from(r"C:\data\.litechat");
         let expected = config.join(DEFAULT_WORKSPACE_DIR);
         assert!(expected.ends_with("workspace"));
