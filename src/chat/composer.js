@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { closeContextMenu, showContextMenu } from "../ui/context-menu";
 import { REASONING_LEVELS, reasoningLabel } from "../settings/model-settings";
 import { showImagePreview } from "../render/media";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { captureWithSnippingTool, pixelsToFile } from "./clipboard-image";
 
 
@@ -17,6 +18,8 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
   const previewUrls = new Map();
   const sentTexts = [];
   let selectedFiles = [];
+  /** 待导入的文件夹：{ name, path } */
+  let selectedFolder = null;
   let historyIndex = -1;
   let draft = "";
   const observer = new ResizeObserver(() => {
@@ -66,8 +69,38 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
     for (const url of previewUrls.values()) URL.revokeObjectURL(url);
     previewUrls.clear();
     list.replaceChildren();
-    list.hidden = !selectedFiles.length;
-    composer.classList.toggle("has-attachments", Boolean(selectedFiles.length));
+    const hasAny = selectedFiles.length > 0 || Boolean(selectedFolder);
+    list.hidden = !hasAny;
+    composer.classList.toggle("has-attachments", hasAny);
+
+    if (selectedFolder) {
+      const { name, path } = selectedFolder;
+      const chip = document.createElement("span");
+      chip.className = "attachment-chip attachment-chip--folder";
+      const badge = document.createElement("span");
+      badge.className = "attachment-badge attachment-badge--folder";
+      badge.textContent = "📁";
+      badge.setAttribute("aria-hidden", "true");
+      const meta = document.createElement("span");
+      meta.className = "attachment-meta";
+      const title = document.createElement("span");
+      title.className = "attachment-name";
+      title.textContent = name;
+      const sub = document.createElement("span");
+      sub.className = "attachment-sub";
+      sub.textContent = path;
+      meta.append(title, sub);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.setAttribute("aria-label", `移除文件夹 ${name}`);
+      remove.textContent = "×";
+      remove.addEventListener("click", () => {
+        selectedFolder = null;
+        renderAttachments();
+      });
+      chip.append(badge, meta, remove);
+      list.append(chip);
+    }
 
     for (const [index, file] of selectedFiles.entries()) {
       const chip = document.createElement("span");
@@ -201,10 +234,29 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
     return parts;
   }
 
+  /** 文件夹由后端直接读取本地目录，前端不经过文件上传通道。 */
+  async function buildFolderPart({ name, path }) {
+    try {
+      const saved = await invoke("import_folder", { path });
+      return {
+        type: "folder",
+        name: saved.path?.split("/").pop() || name,
+        path: saved.path,
+        tree: saved.tree,
+        fileCount: saved.fileCount,
+        truncated: saved.total ?? null,
+      };
+    } catch (error) {
+      console.error("[文件夹] 导入失败:", error);
+      return { type: "folder", name, uploadError: String(error) };
+    }
+  }
+
   async function send({ interrupt = false } = {}) {
     const text = input.value.trim();
     const files = [...selectedFiles];
-    if (!text && !files.length) return;
+    const folder = selectedFolder;
+    if (!text && !files.length && !folder) return;
 
     historyIndex = -1;
     draft = "";
@@ -214,6 +266,7 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
     }
 
     selectedFiles = [];
+    selectedFolder = null;
     picker.value = "";
     input.value = "";
     renderAttachments();
@@ -221,6 +274,10 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
     let parts;
     try {
       parts = await buildParts(text, files);
+      if (folder) {
+        const folderPart = await buildFolderPart(folder);
+        if (folderPart) parts.push(folderPart);
+      }
     } catch (error) {
       console.error("[send] 构建消息失败:", error);
       return;
@@ -265,7 +322,7 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
         label: "上传文件夹",
         action: () => {
           attachButton.setAttribute("aria-expanded", "false");
-          folderPicker.click();
+          void pickFolder();
         },
       },
       { separator: true },
@@ -296,10 +353,29 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
     addFiles(picker.files);
     picker.value = "";
   });
-  folderPicker.addEventListener("change", () => {
-    addFiles(folderPicker.files);
-    folderPicker.value = "";
-  });
+  /** 用系统原生目录选择器，绕开 WebView 的文件上传确认弹窗。 */
+  async function pickFolder() {
+    if (!window.__TAURI_INTERNALS__) {
+      folderPicker.click();
+      return;
+    }
+    try {
+      const chosen = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "选择要上传的文件夹",
+      });
+      if (!chosen) return;
+      const path = typeof chosen === "string" ? chosen : chosen.path;
+      if (!path) return;
+      const name = path.split(/[\/]/).filter(Boolean).pop() || "folder";
+      selectedFolder = { name, path };
+      renderAttachments();
+      input.focus();
+    } catch (error) {
+      console.error("[文件夹] 选择失败:", error);
+    }
+  }
   input.addEventListener("input", (event) => {
     if (event.isComposing) return;
     if (historyIndex !== -1) {

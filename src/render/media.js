@@ -204,6 +204,37 @@ export function renderFilePart(part) {
   return card;
 }
 
+/** 文件夹卡片：显示名称和文件数，点开展开目录树。 */
+export function renderFolderPart(part) {
+  const card = document.createElement("article");
+  card.className = "file-card";
+  const badge = document.createElement("div");
+  badge.className = "file-badge";
+  badge.textContent = "📁";
+  const meta = document.createElement("div");
+  meta.className = "file-meta";
+  const name = document.createElement("strong");
+  name.textContent = part.name || "文件夹";
+  const details = document.createElement("span");
+  details.textContent = part.fileCount ? `${part.fileCount} 个文件` : "空文件夹";
+  meta.append(name, details);
+
+  const action = actionButton("目录", () => {
+    const existing = card.querySelector(".folder-tree");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const pre = document.createElement("pre");
+    pre.className = "folder-tree";
+    pre.textContent = part.tree || "（没有可显示的目录结构）";
+    card.append(pre);
+  });
+  action.disabled = !part.tree;
+  card.append(badge, meta, action);
+  return card;
+}
+
 export function renderCitationsPart(part) {
   const section = document.createElement("section");
   section.className = "citations";

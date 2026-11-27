@@ -1,7 +1,7 @@
 import { copyText } from "../ui/clipboard";
 import { showContextMenu } from "../ui/context-menu";
 import { renderMarkdown } from "../render/markdown";
-import { renderCitationsPart, renderFilePart, renderImagePart } from "../render/media";
+import { renderCitationsPart, renderFilePart, renderFolderPart, renderImagePart } from "../render/media";
 
 function getConversation() {
   return document.querySelector("#conversation");
@@ -119,6 +119,7 @@ function renderPart(part, role) {
   }
   if (part.type === "image") return renderImagePart(part);
   if (part.type === "file") return renderFilePart(part);
+  if (part.type === "folder") return renderFolderPart(part);
   if (part.type === "citations") return renderCitationsPart(part);
   return null;
 }

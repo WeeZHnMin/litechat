@@ -504,6 +504,7 @@
 
 .file-card {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin: 10px 0;
@@ -724,6 +725,27 @@
   margin-left: 2px;
 }
 
+/* 文件夹卡片：样式与文件卡片一致，图标用文件夹符号 */
+.attachment-chip--folder {
+  height: 56px;
+  max-width: 240px;
+  padding: 0 8px 0 6px;
+  gap: 9px;
+  border: 1px solid #e8e8e8;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.attachment-badge--folder {
+  color: #fff;
+  background: #d9a441;
+  font-size: 16px;
+}
+
+.attachment-chip--folder > button {
+  margin-left: 2px;
+}
+
 .attachment-chip--image {
   position: relative;
   padding: 0;
@@ -837,6 +859,7 @@
   .attachment-chip--file { border-color: #333434; background: #202121; }
   .attachment-badge--text,
   .attachment-badge--plain { color: #ccc; background: #34363a; }
+  .attachment-chip--folder { border-color: #333434; background: #202121; }
   .attachment-meta > .attachment-name { color: #e4e4e4; }
   .attachment-meta > .attachment-sub { color: #777; }
   .attachment-chip--image > button { background: rgb(0 0 0 / 70%); }
@@ -868,3 +891,22 @@
 }
 
 
+
+/* 展开后的目录树，占满整行 */
+.folder-tree {
+  width: 100%;
+  max-height: 320px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #f4f4f5;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: pre;
+}
+
+@media (prefers-color-scheme: dark) {
+  .folder-tree { background: #161717; color: #bbb; }
+}
