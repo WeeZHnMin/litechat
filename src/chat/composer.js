@@ -5,7 +5,7 @@ import { showImagePreview } from "../render/media";
 import { captureWithSnippingTool, pixelsToFile } from "./clipboard-image";
 
 
-export function initComposer({ appendMessage, onStop, onReasoningChange }) {
+export function initComposer({ appendMessage, onStop, onReasoningChange, onModelChange, onListModels }) {
   const input = document.querySelector("#message-input");
   const picker = document.querySelector("#attachment-input");
   const folderPicker = document.querySelector("#folder-input");
@@ -369,13 +369,25 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
   stopButton.addEventListener("click", () => onStop?.());
 
   let effort = "off";
+  let modelName = "";
+  let loadingModels = false;
+
+  /** 模型名过长时中间省略，保住首尾可辨识部分。 */
+  function shortModel(name) {
+    if (name.length <= 18) return name;
+    return `${name.slice(0, 9)}…${name.slice(-6)}`;
+  }
 
   function renderEffort() {
-    thinkingToggle.textContent = effort === "off" ? "深度思考" : `思考 · ${reasoningLabel(effort)}`;
+    const label = modelName ? shortModel(modelName) : "选择模型";
+    const suffix = effort === "off" ? "" : ` · ${reasoningLabel(effort)}`;
+    thinkingToggle.textContent = `${label}${suffix}`;
     thinkingToggle.setAttribute("aria-pressed", String(effort !== "off"));
     thinkingToggle.setAttribute("aria-haspopup", "menu");
     thinkingToggle.setAttribute("aria-expanded", "false");
-    thinkingToggle.title = "选择模型的推理强度";
+    thinkingToggle.title = modelName
+      ? `模型 ${modelName}，推理强度 ${reasoningLabel(effort)}`
+      : "选择模型和推理强度";
   }
 
   async function applyEffort(value) {
@@ -391,22 +403,93 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
     }
   }
 
+  async function applyModel(name) {
+    if (!name || name === modelName) return;
+    const previous = modelName;
+    modelName = name;
+    renderEffort();
+    try {
+      await onModelChange?.(name);
+    } catch {
+      modelName = previous;
+      renderEffort();
+    }
+  }
+
+  /** 第二级：选推理强度。 */
   function openEffortMenu() {
     const rect = thinkingToggle.getBoundingClientRect();
     thinkingToggle.setAttribute("aria-expanded", "true");
     showContextMenu(
       rect.left,
       rect.top - 8,
-      REASONING_LEVELS.map((level) => ({
-        label:
-          level.value === effort
-            ? `✓ ${level.label} · ${level.hint}`
-            : `${level.label} · ${level.hint}`,
-        action: () => void applyEffort(level.value),
-      })),
+      [
+        { label: `模型：${modelName || "未选择"}`, disabled: true },
+        { separator: true },
+        ...REASONING_LEVELS.map((level) => ({
+          label:
+            level.value === effort
+              ? `✓ ${level.label} · ${level.hint}`
+              : `${level.label} · ${level.hint}`,
+          action: () => void applyEffort(level.value),
+        })),
+      ],
       { placement: "above" },
     );
     const reset = () => thinkingToggle.setAttribute("aria-expanded", "false");
+    window.addEventListener("pointerdown", reset, { once: true });
+  }
+
+  /** 第一级：每次点击都重新拉模型列表。 */
+  async function openModelMenu() {
+    if (loadingModels) return;
+    const rect = thinkingToggle.getBoundingClientRect();
+    thinkingToggle.setAttribute("aria-expanded", "true");
+    loadingModels = true;
+    showContextMenu(rect.left, rect.top - 8, [{ label: "正在获取模型…", disabled: true }], {
+      placement: "above",
+    });
+
+    let names = [];
+    try {
+      names = (await onListModels?.()) ?? [];
+    } catch (error) {
+      console.error("获取模型列表失败:", error);
+      names = [];
+    } finally {
+      loadingModels = false;
+    }
+
+    if (!names.length) {
+      showContextMenu(
+        rect.left,
+        rect.top - 8,
+        [
+          { label: "没有获取到模型", disabled: true },
+          {
+            label: modelName ? `仅调整思考强度（${modelName}）` : "仅调整思考强度",
+            action: () => openEffortMenu(),
+          },
+        ],
+        { placement: "above" },
+      );
+      return;
+    }
+
+    const reset = () => thinkingToggle.setAttribute("aria-expanded", "false");
+    showContextMenu(
+      rect.left,
+      rect.top - 8,
+      names.map((name) => ({
+        label: name,
+        checked: name === modelName,
+        action: () => {
+          reset();
+          void applyModel(name).then(() => openEffortMenu());
+        },
+      })),
+      { placement: "above", searchable: names.length > 8 },
+    );
     window.addEventListener("pointerdown", reset, { once: true });
   }
 
@@ -416,12 +499,18 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
       closeContextMenu();
       return;
     }
-    openEffortMenu();
+    void openModelMenu();
   });
 
   /** 设置里保存或切换模型后，把输入栏的档位同步成保存值。 */
   function setReasoningEffort(value) {
     effort = value || "off";
+    renderEffort();
+  }
+
+  /** 设置页或启动时同步当前模型名。 */
+  function setModel(name) {
+    modelName = name || "";
     renderEffort();
   }
 
@@ -433,6 +522,7 @@ export function initComposer({ appendMessage, onStop, onReasoningChange }) {
     setText,
     setBusy,
     setReasoningEffort,
+    setModel,
     getEffort: () => effort,
     getText: () => input.value,
   };

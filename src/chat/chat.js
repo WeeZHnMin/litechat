@@ -147,7 +147,7 @@ function attachMessageMenu(element, message, extraItems = []) {
   });
 }
 
-export function appendMessage(message, { onResend, pending = false } = {}) {
+export function appendMessage(message, { onResend, pending = false, detached = false } = {}) {
   const role = message.role === "user" ? "user" : "assistant";
   const element = document.createElement("article");
   element.className = `message message--${role}`;
@@ -162,14 +162,16 @@ export function appendMessage(message, { onResend, pending = false } = {}) {
   for (const part of normalizeParts(message)) {
     if (part.type === "tool") {
       if (!tools) {
-        tools = [];
+        // 连续的 tool part 收进同一个容器，避免每个都被单独包裹
+        tools = document.createElement("div");
+        tools.className = "tool-group";
         content.append(tools);
       }
       const block = createToolBlock();
       block.describe(part.server || "mcp", part.name || "tool");
       block.setArguments(part.arguments);
       block.setResult(part.result, part.error);
-      tools.push(block.element);
+      tools.append(block.element);
       continue;
     }
     tools = null;
@@ -183,8 +185,10 @@ export function appendMessage(message, { onResend, pending = false } = {}) {
     extraItems.push({ separator: true }, { label: "重新发送", action: () => onResend(text) });
   }
   attachMessageMenu(element, message, extraItems);
-  getConversation().append(element);
-  scrollToBottom();
+  if (!detached) {
+    getConversation().append(element);
+    scrollToBottom();
+  }
   return {
     element,
     content,
@@ -231,13 +235,13 @@ function timelineToParts(entries) {
     .filter(Boolean);
 }
 
-export function createAssistantStream() {
+export function createAssistantStream({ detached = false } = {}) {
   let timer = 0;
   let frame = 0;
   let lastRenderAt = 0;
   let finished = false;
   const MIN_RENDER_INTERVAL = 50;
-  let { element, content } = appendMessage({ role: "assistant", parts: [] });
+  let { element, content } = appendMessage({ role: "assistant", parts: [] }, { detached });
   element.classList.add("is-streaming");
 
   const timeline = [];
@@ -247,6 +251,29 @@ export function createAssistantStream() {
   let textEntry = null;
   /** 被用户消息打断过的段落，按出现顺序记录，落库时要拼回去。 */
   const finishedSegments = [];
+  /** 这一轮产生的所有顶层元素，切换对话时按顺序挂载。 */
+  const roots = [element];
+  let mounted = !detached;
+
+  /** 把本轮流的所有元素挂到会话区（切回该对话时调用）。 */
+  function mount(container) {
+    if (mounted || !container) return;
+    for (const node of roots) container.append(node);
+    mounted = true;
+  }
+
+  /** 从会话区摘下来，流继续在内存里跑（切走时调用）。 */
+  function unmount() {
+    for (const node of roots) node.remove();
+    mounted = false;
+  }
+
+  /** 彻底丢弃本轮的元素；内容已落库时调用，避免下次挂载出现重复。 */
+  function dispose() {
+    for (const node of roots) node.remove();
+    roots.length = 0;
+    mounted = false;
+  }
 
   /**
    * 用户消息要插进这一轮中间：把当前已生成的内容封成一段，
@@ -266,9 +293,12 @@ export function createAssistantStream() {
       finishedSegments.push(parts);
     } else {
       element.remove();
+      roots.splice(roots.indexOf(element), 1);
     }
-    ({ element, content } = appendMessage({ role: "assistant", parts: [] }));
+    ({ element, content } = appendMessage({ role: "assistant", parts: [] }, { detached: !mounted }));
     element.classList.add("is-streaming");
+    roots.push(element);
+    if (mounted) getConversation().append(element);
     return element;
   }
 
@@ -421,6 +451,12 @@ export function createAssistantStream() {
 
   return {
     element,
+    mount,
+    unmount,
+    dispose,
+    get isMounted() {
+      return mounted;
+    },
     /** 用户消息要插进来时调用：封存当前段并返回新的空助手元素。 */
     split,
     push(chunk) {

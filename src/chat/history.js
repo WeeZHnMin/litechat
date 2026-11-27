@@ -18,7 +18,8 @@ export class HistoryView extends PanelView {
     super(options);
     this.#appendMessage = options.appendMessage;
     this.#clearConversation = options.clearConversation;
-    this.onLeave = options.onLeave;
+    this.onEnter = options.onEnter;
+    this.isRunning = options.isRunning ?? null;
     this.#list = document.querySelector("#history-list");
     this.#scroll = createScrollMemory(options.conversationElement);
     this.toggleButton.addEventListener("click", () => this.manager.toggle(this));
@@ -85,7 +86,18 @@ export class HistoryView extends PanelView {
       const title = document.createElement("strong");
       title.textContent = item.title;
       const time = document.createElement("span");
-      time.textContent = this.#dateFormatter.format(new Date(item.updated_at * 1000));
+      time.className = "history-time";
+      const running = this.isRunning?.(item.id);
+      if (running) {
+        const dot = document.createElement("span");
+        dot.className = "history-running";
+        dot.setAttribute("aria-label", "正在后台生成");
+        dot.title = "正在后台生成";
+        time.textContent = "";
+        time.append(dot);
+        option.classList.add("is-running");
+      }
+      time.append(this.#dateFormatter.format(new Date(item.updated_at * 1000)));
       option.append(title, time);
       option.addEventListener("mouseenter", () => {
         this.#selectedIndex = index;
@@ -111,7 +123,13 @@ export class HistoryView extends PanelView {
     });
   }
 
-  async #ensureConversation(message) {
+  async #ensureConversation(message, pinnedId) {
+    // 已经明确属于某个会话时直接用，避免切换对话后写错地方
+    if (pinnedId) return pinnedId;
+    return this.#createConversation(message);
+  }
+
+  async #createConversation(message) {
     if (this.#currentId) return this.#currentId;
     const parts = message.parts || [];
     const text = parts.find((part) => part.text)?.text?.trim() || "";
@@ -121,12 +139,12 @@ export class HistoryView extends PanelView {
     return this.#currentId;
   }
 
-  async record(message) {
-    const expectedGeneration = this.#generation;
+  /** 落库属于某个会话的消息。
+   *  `pinnedId` 指定时绑定到该会话，不受后续切换对话影响——
+   *  用于「回复被中断后切走」这类收尾写入。 */
+  async record(message, pinnedId = null) {
     return this.#run(async () => {
-      if (expectedGeneration !== this.#generation) return null;
-      const conversationId = await this.#ensureConversation(message);
-      if (expectedGeneration !== this.#generation) return null;
+      const conversationId = await this.#ensureConversation(message, pinnedId);
       const parts = message.parts || [{ type: "markdown", text: message.content ?? message.text ?? "" }];
       return invoke("append_message", { conversationId, role: message.role, parts });
     });
@@ -135,7 +153,6 @@ export class HistoryView extends PanelView {
   async openConversation(conversationId) {
     this.#scroll.capture();
     this.#scroll.reset();
-    this.onLeave?.(conversationId);
     this.#generation += 1;
     const expectedGeneration = this.#generation;
     return this.#run(async () => {
@@ -146,6 +163,8 @@ export class HistoryView extends PanelView {
       for (const message of messages) {
         this.#appendMessage({ role: message.role, parts: message.parts });
       }
+      // 已有历史渲染完，再把该会话正在跑的流接到末尾
+      this.onEnter?.(conversationId);
       this.manager.close(this);
       this.#scroll.restore(conversationId);
     });
@@ -165,6 +184,7 @@ export class HistoryView extends PanelView {
       for (const message of messages) {
         this.#appendMessage({ role: message.role, parts: message.parts });
       }
+      this.onEnter?.(this.#currentId);
       this.#scroll.restore(this.#currentId);
     });
   }

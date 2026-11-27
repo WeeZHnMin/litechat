@@ -160,6 +160,27 @@ button {
   font-size: 9px;
 }
 
+/* 后台仍在生成：时间旁一个呼吸的小圆点 */
+.history-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.history-running {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #4a9eff;
+  animation: history-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes history-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
 .history-empty {
   padding: 24px 0;
   color: #999;
@@ -925,43 +946,153 @@ button {
   position: fixed;
   z-index: 60;
   display: flex;
-  min-width: 132px;
+  min-width: 168px;
+  max-width: min(420px, calc(100vw - 16px));
+  max-height: var(--menu-max-height, 360px);
   flex-direction: column;
-  padding: 4px;
-  border: 1px solid #e6e6e6;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 98%);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 6%),
+    0 8px 24px rgb(0 0 0 / 12%),
+    0 16px 48px rgb(0 0 0 / 8%);
+  backdrop-filter: blur(12px);
+  scrollbar-width: thin;
+  scrollbar-color: rgb(0 0 0 / 22%) transparent;
+  animation: menu-in 120ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
-.context-menu-item {
-  padding: 7px 10px;
-  border: 0;
-  border-radius: 6px;
-  color: #222;
+.context-menu::-webkit-scrollbar {
+  width: 10px;
+}
+
+.context-menu::-webkit-scrollbar-track {
   background: transparent;
+}
+
+.context-menu::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 24%);
+  background-clip: content-box;
+}
+
+.context-menu::-webkit-scrollbar-thumb:hover {
+  background: rgb(0 0 0 / 40%);
+  background-clip: content-box;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
+.context-menu-search {
+  position: sticky;
+  z-index: 1;
+  top: -5px;
+  height: 30px;
+  flex: 0 0 auto;
+  margin: -5px -5px 5px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 1px solid #efefef;
+  border-radius: 12px 12px 0 0;
+  outline: none;
+  color: #222;
+  background: rgb(250 250 250 / 98%);
+  font: inherit;
   font-size: 11px;
-  text-align: left;
+}
+
+.context-menu-search::placeholder {
+  color: #aaa;
+}
+
+.context-menu-search::-webkit-search-cancel-button {
   cursor: pointer;
 }
 
+.context-menu-empty {
+  flex: 0 0 auto;
+  padding: 14px 12px;
+  color: #999;
+  font-size: 11px;
+  text-align: center;
+}
+
+.context-menu-item {
+  /* 滚动容器是 flex，子项必须固定高度否则会被压扁 */
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 7px;
+  color: #222;
+  background: transparent;
+  font-size: 11.5px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background-color 90ms ease;
+}
+
 .context-menu-item:hover {
-  background: #f2f2f2;
+  background: #f1f2f4;
+}
+
+/* 当前选中的项：左侧勾 + 加粗 */
+.context-menu-item.is-checked {
+  position: relative;
+  padding-left: 26px;
+  font-weight: 500;
+}
+
+.context-menu-item.is-checked::before {
+  content: "✓";
+  position: absolute;
+  left: 10px;
+  color: #2b7de9;
+  font-weight: 600;
+}
+
+.context-menu-item:active {
+  background: #e8eaed;
 }
 
 .context-menu-item.is-danger {
   color: #c25050;
 }
 
+.context-menu-item.is-danger:hover {
+  background: #fdf2f2;
+}
+
 .context-menu-item:disabled {
-  color: #bbb;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  color: #999;
+  font-size: 10px;
   cursor: default;
+}
+
+.context-menu-item:disabled:hover {
+  background: transparent;
 }
 
 .context-menu-separator {
   height: 1px;
-  margin: 4px 2px;
-  background: #ececec;
+  flex: 0 0 auto;
+  margin: 4px 7px;
+  background: #efefef;
 }
 
 .icon-button {
@@ -1052,12 +1183,16 @@ button {
 }
 
 .thinking-toggle {
+  max-width: 180px;
   padding: 4px 10px;
+  overflow: hidden;
   border: 1px solid #e3e3e3;
   border-radius: 7px;
   color: #999;
   background: transparent;
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
   transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease;
 }
@@ -1179,12 +1314,28 @@ button {
   .test-button .button-spinner { border-color: #4a4b4b; border-top-color: #ddd; }
   .history-item.is-selected { border-color: #3a3b3b; background: #222323; }
   .shortcut-key { border-color: #3b3c3c; color: #ddd; background: #242525; }
-  .context-menu { border-color: #333434; background: #1b1c1c; box-shadow: 0 8px 24px rgb(0 0 0 / 45%); }
+  .context-menu {
+    border-color: rgb(255 255 255 / 8%);
+    background: rgb(28 29 30 / 98%);
+    box-shadow:
+      0 1px 2px rgb(0 0 0 / 40%),
+      0 8px 24px rgb(0 0 0 / 45%),
+      0 16px 48px rgb(0 0 0 / 35%);
+  }
+  .context-menu { scrollbar-color: rgb(255 255 255 / 22%) transparent; }
+  .context-menu::-webkit-scrollbar-thumb { background: rgb(255 255 255 / 22%); background-clip: content-box; }
+  .context-menu::-webkit-scrollbar-thumb:hover { background: rgb(255 255 255 / 38%); background-clip: content-box; }
+  .context-menu-search { border-bottom-color: #2a2b2b; color: #eee; background: rgb(20 21 21 / 98%); }
+  .context-menu-search::placeholder { color: #666; }
   .context-menu-item { color: #e8e8e8; }
   .context-menu-item:hover { background: #2a2b2b; }
+  .context-menu-item:active { background: #343535; }
+  .context-menu-item.is-checked::before { color: #6aa8f5; }
   .context-menu-item.is-danger { color: #e08585; }
-  .context-menu-item:disabled { color: #666; }
-  .context-menu-separator { background: #333434; }
+  .context-menu-item.is-danger:hover { background: #2d1c1c; }
+  .context-menu-item:disabled { color: #777; }
+  .context-menu-empty { color: #777; }
+  .context-menu-separator { background: #2a2b2b; }
   .shortcut-key:hover, .shortcut-key.is-recording { border-color: #777; background: #303131; }
   .shortcut-key.is-rejected { border-color: #a05252; color: #e08585; }
 

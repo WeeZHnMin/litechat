@@ -245,6 +245,10 @@
   margin: 0 0 10px;
 }
 
+.tool-group {
+  margin: 0;
+}
+
 .tool-block > summary {
   display: inline-flex;
   align-items: center;

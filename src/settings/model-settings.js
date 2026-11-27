@@ -64,7 +64,7 @@ const CSS = {
   path: "#model-config-path",
 };
 
-export function initModelSettings({ onReasoningChange } = {}) {
+export function initModelSettings({ onReasoningChange, onModelChange } = {}) {
   const el = {
     provider: document.querySelector(CSS.provider),
     baseUrl: document.querySelector(CSS.baseUrl),
@@ -131,7 +131,9 @@ export function initModelSettings({ onReasoningChange } = {}) {
         setTestResult("", "ok");
       },
     }));
-    const menu = showContextMenu(rect.left, rect.bottom + 4, items);
+    const menu = showContextMenu(rect.left, rect.bottom + 4, items, {
+      searchable: names.length > 8,
+    });
     const reset = () => el.scanModels.setAttribute("aria-expanded", "false");
     window.addEventListener("pointerdown", reset, { once: true });
     if (menu) menu.addEventListener("click", reset, { once: true });
@@ -205,6 +207,7 @@ export function initModelSettings({ onReasoningChange } = {}) {
     el.apiKey.classList.toggle("is-masked", next.hasApiKey);
     dirty = false;
     renderKeyState();
+    onModelChange?.(next.model);
   }
 
   function isDirty() {
@@ -380,7 +383,14 @@ export function initModelSettings({ onReasoningChange } = {}) {
     }
   }
 
+  /** 输入栏切换模型：只改模型名，其余保持原样。 */
+  async function setActiveModel(name) {
+    const view = await invoke("set_active_model", { model: name });
+    applyView(view);
+    return view;
+  }
+
   void reload().then(() => onReasoningChange?.(saved?.reasoningEffort ?? "off"));
 
-  return { reload, setReasoningEffort };
+  return { reload, setReasoningEffort, setActiveModel };
 }

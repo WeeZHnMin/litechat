@@ -180,8 +180,17 @@ export function renderFilePart(part) {
   const details = document.createElement("span");
   details.textContent = [part.mime, formatFileSize(part.size)].filter(Boolean).join(" · ");
   meta.append(name, details);
+
+  // 上传的附件存在工作目录里，用 system 默认程序打开；远程 URL 走浏览器
+  const savedPath = typeof part.path === "string" ? part.path : "";
   const url = safeResourceUrl(part.url, true);
   const action = actionButton("打开", () => {
+    if (savedPath && window.__TAURI_INTERNALS__) {
+      invoke("open_workspace_file", { path: savedPath }).catch((error) => {
+        console.error("无法打开附件:", error);
+      });
+      return;
+    }
     if (!url) return;
     const parsed = new URL(url, window.location.href);
     if (parsed.origin === window.location.origin) {
@@ -190,7 +199,7 @@ export function renderFilePart(part) {
       void openResource(url);
     }
   });
-  action.disabled = !url;
+  action.disabled = !savedPath && !url;
   card.append(badge, meta, action);
   return card;
 }

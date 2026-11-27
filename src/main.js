@@ -38,22 +38,32 @@ const composer = initComposer({
   appendMessage: renderMessage,
   onStop: () => runner.stop(),
   onReasoningChange: (effort) => modelSettings?.setReasoningEffort(effort),
+  onModelChange: (name) => modelSettings?.setActiveModel(name),
+  onListModels: () => invoke("list_saved_models"),
 });
+let runningQuery = () => false;
 const history = initHistory(manager, {
   appendMessage: renderMessage,
   clearConversation,
   conversationElement: document.querySelector("#conversation"),
+  // runner 在下面创建，这里延迟取用
+  isRunning: (id) => Boolean(runningQuery(id)),
 });
 const runner = createConversationRunner({
   history,
   getConversationId: () => history.currentId,
+  getContainer: () => document.querySelector("#conversation"),
   onBusyChange: (busy) => composer.setBusy(busy),
+  // 某个会话开始 / 结束后台生成时，刷新历史列表的标记
+  onRunningChange: () => void history.refresh(),
   onPendingSettled: (entries) => {
     for (const entry of entries) {
       entry.rendered?.markUndelivered?.((text) => void sendText(text));
     }
   },
 });
+
+runningQuery = (id) => runner.isRunning(id);
 
 /** 重新发送一条未送达的消息。 */
 async function sendText(text) {
@@ -62,12 +72,8 @@ async function sendText(text) {
   renderMessage(message);
   await runner.send(message);
 }
-/** 等待模型读取的用户消息，按发送顺序配对 input-accepted 事件。 */
-const pendingMessages = [];
-window.addEventListener("litechat:input-accepted", () => {
-  pendingMessages.shift()?.markAccepted?.();
-});
-history.onLeave = () => runner.stop();
+// 切进某个会话：把它正在后台跑的流接到历史记录末尾
+history.onEnter = (conversationId) => runner.switchTo(conversationId);
 const settings = initSettings(manager);
 manager.register(history).register(settings);
 manager.setBaseline(
@@ -80,6 +86,7 @@ manager.setBaseline(
 );
 modelSettings = initModelSettings({
   onReasoningChange: (effort) => composer.setReasoningEffort(effort),
+  onModelChange: (name) => composer.setModel(name),
 });
 initMcpSettings();
 initWorkspaceSettings();
@@ -89,7 +96,7 @@ initPermissionToggle();
 document.addEventListener("keydown", (event) => manager.handleKeyDown(event), true);
 
 function resetChat() {
-  runner.stop();
+  runner.leave();
   history.newChat();
   composer.reset();
 }
@@ -110,12 +117,10 @@ window.addEventListener("litechat:send", async (event) => {
     void history.record(message);
     return;
   }
-  if (runner.isBusy) {
+  // 仅在「当前正在看、且它自己还有流在跑」时才走插话
+  if (runner.hasActiveStream()) {
     const queued = await runner.queueDuringStream(message, rendered);
-    if (queued) {
-      pendingMessages.push(rendered);
-      return;
-    }
+    if (queued) return;
   }
   void runner.send(message);
 });
