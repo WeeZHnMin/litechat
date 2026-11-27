@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { closeContextMenu, showContextMenu } from "../ui/context-menu";
 
 export function initWorkspaceSettings() {
@@ -45,7 +45,6 @@ export function initWorkspaceSettings() {
     }
   }
 
-  /** 用系统原生目录选择器挑一个目录，填进输入框。 */
   async function pickDirectory() {
     if (!window.__TAURI_INTERNALS__) {
       setHint("当前环境不支持选择目录，请手动填写路径", true);
@@ -69,7 +68,6 @@ export function initWorkspaceSettings() {
     }
   }
 
-  /** 历史工作目录：点一下直接切换过去。 */
   async function openHistory() {
     if (historyButton.getAttribute("aria-expanded") === "true") {
       historyButton.setAttribute("aria-expanded", "false");
@@ -87,17 +85,80 @@ export function initWorkspaceSettings() {
     const entries = items.length
       ? items.map((path) => ({
           label: path,
+          title: path,
           checked: path === current,
           action: () => {
             input.value = path;
             void commit();
           },
+          onRemove:
+            path === current
+              ? null
+              : () => void forget(path),
+          removeLabel: `从历史移除 ${path}（不会删除磁盘文件）`,
+          removeTitle: "仅从历史记录移除，不删除磁盘上的文件夹",
         }))
       : [{ label: "还没有切换过目录", disabled: true }];
     showContextMenu(rect.left, rect.bottom + 4, entries);
     const reset = () => historyButton.setAttribute("aria-expanded", "false");
     window.addEventListener("pointerdown", reset, { once: true });
   }
+
+  /** 点 × 后让用户选：只清历史，还是连磁盘一起删。 */
+  async function forget(path) {
+    const rect = historyButton.getBoundingClientRect();
+    showContextMenu(rect.left, rect.bottom + 4, [
+      { label: path, disabled: true, title: path },
+      { separator: true },
+      { label: "仅从历史移除", action: () => void forgetOnly(path) },
+      {
+        label: "连同磁盘文件一起删除",
+        danger: true,
+        action: () => void deleteFromDisk(path),
+      },
+    ]);
+  }
+
+  async function forgetOnly(path) {
+    const message = `${path}\n\n只会删除这条历史记录，磁盘上的文件夹和其中的文件不受影响，随时可以重新添加。`;
+    if (!(await confirm(message, "从历史中移除？", "移除记录"))) return;
+    try {
+      await invoke("forget_workspace", { path, deleteFiles: false });
+      historyButton.setAttribute("aria-expanded", "false");
+      closeContextMenu();
+      setHint("已从历史移除（磁盘文件未改动）", false);
+    } catch (error) {
+      setHint(String(error), true);
+    }
+  }
+
+  async function deleteFromDisk(path) {
+    const message = `${path}\n\n目录及其中的所有文件和子文件夹都会被删除，此操作无法撤销。`;
+    if (!(await confirm(message, "永久删除这个目录？", "永久删除"))) return;
+    try {
+      await invoke("forget_workspace", { path, deleteFiles: true });
+      historyButton.setAttribute("aria-expanded", "false");
+      closeContextMenu();
+      setHint("已删除目录", false);
+    } catch (error) {
+      setHint(String(error), true);
+    }
+  }
+
+  /** 统一确认：Tauri 下用系统对话框，浏览器预览退回 confirm。 */
+  async function confirm(message, title, okLabel) {
+    if (!window.__TAURI_INTERNALS__) return window.confirm(`${title}
+
+${message}`);
+    try {
+      return await ask(message, { title, kind: "warning", okLabel, cancelLabel: "取消" });
+    } catch {
+      return window.confirm(`${title}
+
+${message}`);
+    }
+  }
+
 
   browse.addEventListener("click", () => void pickDirectory());
   historyButton.addEventListener("click", () => void openHistory());
@@ -107,7 +168,6 @@ export function initWorkspaceSettings() {
       void commit();
     }
   });
-  // 手改路径后离开输入框就保存，不用再找按钮
   input.addEventListener("blur", () => {
     const value = input.value.trim();
     if (value && value !== current) void commit();

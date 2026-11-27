@@ -111,6 +111,16 @@ pub fn get_workspace_history(app: AppHandle) -> Result<Vec<String>, String> {
     Ok(crate::app::paths::workspace_history(&app))
 }
 
+/// 从历史里移除一条记录。delete_files 为 true 时连同磁盘目录一起删。
+#[tauri::command]
+pub fn forget_workspace(
+    app: AppHandle,
+    path: String,
+    delete_files: Option<bool>,
+) -> Result<Vec<String>, String> {
+    crate::app::paths::remove_workspace(&app, &path, delete_files.unwrap_or(false))
+}
+
 #[tauri::command]
 pub fn set_workspace(app: AppHandle, path: String) -> Result<String, String> {
     let resolved = crate::app::paths::set_workspace(&app, &path)?;

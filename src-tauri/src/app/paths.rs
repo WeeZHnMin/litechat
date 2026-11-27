@@ -2,7 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
-/// 用户主目录下的应用目录，存放配置、数据库和默认工作目录。
 const APP_DIR: &str = "LiteChat";
 
 fn home_dir() -> Option<PathBuf> {
@@ -35,7 +34,7 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 const WORKSPACE_FILE: &str = "workspace.txt";
 
-/// 不直接用 `.litechat/` 本身，避免模型误碰配置和数据库。
+/// 不直接用应用目录本身，避免模型误碰配置和数据库。
 const DEFAULT_WORKSPACE_DIR: &str = "workspace";
 
 fn workspace_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -68,14 +67,12 @@ pub fn ensure_workspace(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// 历史工作目录最多记这么多条，最近的排前面。
 const MAX_WORKSPACE_HISTORY: usize = 10;
 
 fn history_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(config_dir(app)?.join("workspaces.json"))
 }
 
-/// 读取历史工作目录，过滤掉已经不存在的。
 pub fn workspace_history(app: &AppHandle) -> Vec<String> {
     history_path(app)
         .ok()
@@ -87,7 +84,114 @@ pub fn workspace_history(app: &AppHandle) -> Vec<String> {
         .collect()
 }
 
-/// 把目录记进历史：已存在则提到最前，只保留最近若干条。
+/// 删除历史记录；delete_files 为 true 时连同磁盘目录一起删。
+pub fn remove_workspace(
+    app: &AppHandle,
+    path: &str,
+    delete_files: bool,
+) -> Result<Vec<String>, String> {
+    let target_dir = PathBuf::from(path);
+    let current = workspace(app);
+    if current == target_dir
+        || strip_verbatim(&current) == strip_verbatim(&target_dir)
+    {
+        return Err("不能删除正在使用的工作目录，请先切换到其他目录".into());
+    }
+
+    if is_dangerous_path(&target_dir) {
+        return Err(format!("出于安全考虑，不能删除 {path}"));
+    }
+
+    let target = history_path(app)?;
+    let mut list = workspace_history(app);
+    let before = list.len();
+    list.retain(|item| item != path);
+    let in_history = list.len() != before;
+
+    if delete_files {
+        if !target_dir.exists() {
+            return Err(format!("目录不存在：{path}"));
+        }
+        fs::remove_dir_all(&target_dir)
+            .map_err(|error| format!("删除目录失败：{error}"))?;
+    } else if !in_history {
+        return Err(format!("历史里没有这个目录：{path}"));
+    }
+
+    if let Some(directory) = target.parent() {
+        fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    }
+    let bytes = serde_json::to_vec_pretty(&list).map_err(|error| error.to_string())?;
+    fs::write(target, bytes).map_err(|error| error.to_string())?;
+    Ok(list)
+}
+
+fn is_dangerous_path(path: &Path) -> bool {
+    let normalized = strip_verbatim(path);
+    if !normalized.is_absolute() {
+        return true;
+    }
+    let text = normalized.display().to_string();
+    let trimmed = text.trim_end_matches(['\\', '/']);
+    if trimmed.len() <= 2 && trimmed.ends_with(':') {
+        return true;
+    }
+
+    if let Some(home) = home_dir() {
+        if strip_verbatim(&home) == normalized {
+            return true;
+        }
+    }
+
+    // 用户主目录的子目录要放行，否则整棵 C:\Users 都会被挡掉
+    let home = home_dir().map(|home| strip_verbatim(&home));
+    let inside_home = home.as_ref().is_some_and(|home| is_within(&normalized, home));
+    if !inside_home && protected_roots().iter().any(|root| is_within(&normalized, root)) {
+        return true;
+    }
+
+    // 桌面、文档等用户目录同样不可恢复；AppData 整棵子树都保护
+    if let Some(home) = home {
+        let user_folders = ["Desktop", "Documents", "Downloads", "Pictures", "Music", "Videos"];
+        for name in user_folders {
+            if normalized == home.join(name) {
+                return true;
+            }
+        }
+        if is_within(&normalized, &home.join("AppData")) {
+            return true;
+        }
+    }
+    false
+}
+
+fn protected_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = vec![
+        PathBuf::from(r"C:\Windows"),
+        PathBuf::from(r"C:\Program Files"),
+        PathBuf::from(r"C:\Program Files (x86)"),
+        PathBuf::from(r"C:\ProgramData"),
+        PathBuf::from(r"C:\Users"),
+        PathBuf::from(r"C:\$Recycle.Bin"),
+        PathBuf::from(r"C:\System Volume Information"),
+        PathBuf::from(r"C:\Recovery"),
+        PathBuf::from(r"C:\Boot"),
+        PathBuf::from(r"C:\PerfLogs"),
+    ];
+    for drive in ['D', 'E', 'F', 'G'] {
+        roots.push(PathBuf::from(format!(r"{drive}:\System Volume Information")));
+        roots.push(PathBuf::from(format!(r"{drive}:\$Recycle.Bin")));
+    }
+    roots
+}
+
+fn is_within(path: &Path, root: &Path) -> bool {
+    if path == root {
+        return true;
+    }
+    path.starts_with(root)
+}
+
 fn remember_workspace(app: &AppHandle, path: &Path) {
     let value = path.display().to_string();
     let Ok(target) = history_path(app) else {
@@ -102,8 +206,7 @@ fn remember_workspace(app: &AppHandle, path: &Path) {
     }
 }
 
-/// Windows 的 canonicalize 会加 `\\?\` 前缀，显示在界面上很难看。
-/// 这里去掉它；UNC 路径还原成 `\\server\share` 形式。
+/// 去掉 Windows canonicalize 产生的 `\\?\` 前缀。
 fn strip_verbatim(path: &Path) -> PathBuf {
     const VERBATIM_UNC: &str = r"\\?\UNC\";
     const VERBATIM: &str = r"\\?\";
@@ -139,11 +242,9 @@ pub fn set_workspace(app: &AppHandle, value: &str) -> Result<PathBuf, String> {
     Ok(absolute)
 }
 
-/// 旧版本把配置放在项目根或 Tauri 默认的 appConfig 目录，
-/// 首次启动时把这些文件搬过来，避免用户丢失历史记录。
+/// 从旧位置迁移配置，避免升级后丢失历史。
 fn migrate_legacy(app: &AppHandle, target: &Path) {
     let mut sources: Vec<PathBuf> = Vec::new();
-    // 开发时项目根目录下的 .litechat
     if let Ok(exe) = std::env::current_exe() {
         if let Some(root) = exe
             .ancestors()
@@ -174,8 +275,7 @@ fn migrate_legacy(app: &AppHandle, target: &Path) {
             })
             .collect();
 
-        // SQLite 的 -wal 和 -shm 必须跟主库一起迁移，且主库要先落位；
-        // read_dir 顺序不保证，这里显式排序。
+        // SQLite 的 -wal/-shm 必须跟主库一起迁移，顺序有依赖
         items.sort_by_key(|(name, _)| match name.as_str() {
             "history.db" => 0,
             "history.db-wal" => 1,
@@ -183,7 +283,6 @@ fn migrate_legacy(app: &AppHandle, target: &Path) {
             _ => 3,
         });
 
-        // 目标已有主库时说明迁移过一次了，别再拷半套 SQLite 文件
         let db_exists = target.join("history.db").exists();
 
         for (name, path) in items {
@@ -196,7 +295,6 @@ fn migrate_legacy(app: &AppHandle, target: &Path) {
                     let _ = fs::copy(&path, &destination);
                 }
             } else if path.is_dir() {
-                // 目录已存在也要往里补，否则空目录会挡掉整个子树的迁移
                 let _ = copy_dir(&path, &destination);
             }
         }
@@ -255,7 +353,6 @@ mod tests {
         let target = base.join("target");
         fs::create_dir_all(source.join("uploads")).unwrap();
         fs::write(source.join("uploads/a.txt"), b"file").unwrap();
-        // 目标里已有同名目录，但没有内容
         fs::create_dir_all(&target).unwrap();
 
         copy_dir(&source, &target).unwrap();
@@ -269,14 +366,12 @@ mod tests {
 
     #[test]
     fn history_keeps_most_recent_first_and_dedups() {
-        // 直接验证列表处理逻辑：去重 + 最近优先
         let mut list: Vec<String> = vec!["/a".into(), "/b".into()];
         let value = "/c".to_string();
         list.retain(|item| item != &value);
         list.insert(0, value.clone());
         assert_eq!(list, vec!["/c", "/a", "/b"]);
 
-        // 再次访问 /a，应提到最前而不是重复
         list.retain(|item| item != "/a");
         list.insert(0, "/a".into());
         assert_eq!(list, vec!["/a", "/c", "/b"]);
@@ -304,8 +399,49 @@ mod tests {
     }
 
     #[test]
+    fn dangerous_paths_are_rejected() {
+        assert!(is_dangerous_path(Path::new("C:\\")));
+        assert!(is_dangerous_path(Path::new("D:")));
+        // 系统目录的子目录同样危险
+        assert!(is_dangerous_path(Path::new("C:\\Windows\\System32")));
+        assert!(is_dangerous_path(Path::new("C:\\Program Files\\App")));
+        assert!(is_dangerous_path(Path::new("C:\\Users")));
+        assert!(is_dangerous_path(Path::new("C:\\$Recycle.Bin")));
+        if let Some(home) = home_dir() {
+            let home = strip_verbatim(&home);
+            assert!(is_dangerous_path(&home), "主目录本身不能删");
+            assert!(is_dangerous_path(&home.join("Desktop")));
+            assert!(is_dangerous_path(&home.join("AppData").join("Local")));
+            assert!(
+                !is_dangerous_path(&home.join("projects").join("demo")),
+                "主目录下的普通子目录应放行"
+            );
+        }
+        // 其他盘的普通目录放行
+        assert!(!is_dangerous_path(Path::new("D:\\Projects\\demo")));
+    }
+
+    #[test]
+    fn forget_removes_only_the_target() {
+        let mut list: Vec<String> = vec!["/a".into(), "/b".into(), "/c".into()];
+        let target = "/b".to_string();
+        let before = list.len();
+        list.retain(|item| item != &target);
+        assert_eq!(list.len(), before - 1);
+        assert_eq!(list, vec!["/a", "/c"]);
+    }
+
+    #[test]
+    fn forgetting_missing_entry_is_rejected() {
+        let list: Vec<String> = vec!["/a".into()];
+        let target = "/missing".to_string();
+        let before = list.len();
+        let after: Vec<String> = list.into_iter().filter(|item| item != &target).collect();
+        assert_eq!(before, after.len(), "不存在的条目不应改变列表");
+    }
+
+    #[test]
     fn app_dir_name_is_not_hidden() {
-        // 放在用户主目录下，不该是点开头的隐藏目录
         assert!(!APP_DIR.starts_with('.'));
     }
 }

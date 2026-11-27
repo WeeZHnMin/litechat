@@ -54,6 +54,7 @@ fn main() {
             tools::mcp::commands::get_workspace,
             tools::mcp::commands::set_workspace,
             tools::mcp::commands::get_workspace_history,
+            tools::mcp::commands::forget_workspace,
             tools::mcp::commands::save_attachment,
             tools::mcp::commands::save_folder,
             tools::mcp::commands::import_folder,

@@ -14,7 +14,6 @@ export function showContextMenu(x, y, items, { placement = "auto", searchable = 
   element.className = "context-menu";
   element.setAttribute("role", "menu");
 
-  // 菜单不能超出视口，也不要占满整屏——留出上下文给用户
   const maxHeight = Math.min(360, Math.round(window.innerHeight * 0.5));
   element.style.setProperty("--menu-max-height", `${Math.max(160, maxHeight)}px`);
 
@@ -40,7 +39,6 @@ export function showContextMenu(x, y, items, { placement = "auto", searchable = 
   };
 
   const renderButtons = (list, searchToKeep) => {
-    // 清掉旧的按钮，保留搜索框
     for (const node of [...element.children]) {
       if (node !== searchToKeep) node.remove();
     }
@@ -74,6 +72,26 @@ export function showContextMenu(x, y, items, { placement = "auto", searchable = 
         closeContextMenu();
         void item.action?.();
       });
+
+      // 带删除的条目：主体仍是按钮，右侧挂一个独立的移除控件，
+      // 点删除不会触发这一条的切换动作。
+      if (item.onRemove) {
+        const row = document.createElement("div");
+        row.className = "context-menu-row";
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "context-menu-remove";
+        remove.setAttribute("aria-label", item.removeLabel ?? `移除 ${item.label}`);
+        remove.title = item.removeTitle ?? "从历史中移除";
+        remove.textContent = "×";
+        remove.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void item.onRemove();
+        });
+        row.append(button, remove);
+        element.append(row);
+        continue;
+      }
       element.append(button);
     }
   };

@@ -1102,6 +1102,42 @@ button {
   background: #efefef;
 }
 
+/* 带删除按钮的菜单项 */
+.context-menu-row {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.context-menu-row > .context-menu-item {
+  min-width: 0;
+  flex: 1;
+}
+
+.context-menu-remove {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #aaa;
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.context-menu-remove:hover {
+  color: #c25050;
+  background: #fdf2f2;
+}
+
 .icon-button {
   display: inline-flex;
   width: 26px;
@@ -1348,6 +1384,8 @@ button {
   .context-menu-item:disabled { color: #777; }
   .context-menu-empty { color: #777; }
   .context-menu-separator { background: #2a2b2b; }
+  .context-menu-remove { color: #777; }
+  .context-menu-remove:hover { color: #e08585; background: #2d1c1c; }
   .shortcut-key:hover, .shortcut-key.is-recording { border-color: #777; background: #303131; }
   .shortcut-key.is-rejected { border-color: #a05252; color: #e08585; }
 
