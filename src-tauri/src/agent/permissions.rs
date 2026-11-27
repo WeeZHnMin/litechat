@@ -114,6 +114,14 @@ impl Permissions {
     }
 }
 
+/// 无论哪种审批模式，这些工具都必须逐个确认。
+/// 放这里的是不可撤销的操作——删掉就没了，不能靠「全部允许」跳过。
+pub const ALWAYS_CONFIRM_TOOLS: [&str; 1] = ["delete_files"];
+
+fn needs_confirmation_every_time(tool: &str, server: &str) -> bool {
+    server == crate::tools::mcp::BUILTIN_SERVER && ALWAYS_CONFIRM_TOOLS.contains(&tool)
+}
+
 fn is_read_only(tool: &str, server: &str) -> bool {
     if server == crate::tools::mcp::BUILTIN_SERVER {
         if READ_ONLY_TOOLS.contains(&tool) {
@@ -130,6 +138,10 @@ fn is_read_only(tool: &str, server: &str) -> bool {
 }
 
 pub(crate) fn decide(inner: &Inner, tool: &str, server: &str) -> Decision {
+    // 不可撤销的操作不看模式，也不看白名单
+    if needs_confirmation_every_time(tool, server) {
+        return Decision::Ask;
+    }
     if is_read_only(tool, server) {
         return Decision::Allow;
     }
@@ -275,10 +287,14 @@ pub fn respond_approval(
         let _ = sender.send(allowed);
     }
     if allowed {
-        match remember.as_deref() {
-            Some("session") => state.allow_session(&tool),
-            Some("always") => state.allow_always(&tool),
-            _ => {}
+        // 不可撤销的操作不接受「记住选择」
+        let locked = needs_confirmation_every_time(&tool, crate::tools::mcp::BUILTIN_SERVER);
+        if !locked {
+            match remember.as_deref() {
+                Some("session") => state.allow_session(&tool),
+                Some("always") => state.allow_always(&tool),
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -433,6 +449,26 @@ mod tests {
         for tool in ["write_file", "run_command", "add_mcp_server"] {
             assert_eq!(decide(&inner, tool, "shell"), Decision::Allow);
         }
+    }
+
+    #[test]
+    fn delete_always_requires_approval_in_every_mode() {
+        for mode in [ApprovalMode::Ask, ApprovalMode::Session, ApprovalMode::Always] {
+            let mut inner = fresh(mode);
+            // 即使把它记进白名单也不放行
+            inner.always_allowed.insert("delete_files".into());
+            inner.session_allowed.insert("delete_files".into());
+            assert_eq!(
+                decide(&inner, "delete_files", "shell"),
+                Decision::Ask,
+                "{mode:?} 模式下删除也必须确认"
+            );
+        }
+    }
+
+    #[test]
+    fn delete_is_not_treated_as_read_only() {
+        assert!(!is_read_only("delete_files", "shell"));
     }
 
     #[test]

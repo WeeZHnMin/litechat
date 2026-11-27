@@ -40,6 +40,20 @@ pub fn get_workspace(app: AppHandle) -> Result<String, String> {
     Ok(app.state::<McpManager>().workspace().display().to_string())
 }
 
+/// 用系统默认程序打开工作目录内的文件。
+#[tauri::command]
+pub fn open_workspace_file(app: AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let root = app.state::<McpManager>().workspace();
+    let target = crate::tools::mcp::files::resolve(&root, &path)?;
+    if !target.is_file() {
+        return Err(format!("文件不存在：{path}"));
+    }
+    app.opener()
+        .open_path(target.to_string_lossy(), None::<&str>)
+        .map_err(|error| format!("无法打开文件：{error}"))
+}
+
 /// 保存上传的附件到工作目录的 uploads/ 下，返回相对路径。
 /// 消息里只带路径和摘要，模型需要内容时用 read_document 去读。
 #[tauri::command]

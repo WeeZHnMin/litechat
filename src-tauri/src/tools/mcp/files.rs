@@ -57,6 +57,21 @@ const TOOLS: &str = r#"[
     }
   },
   {
+    "name": "delete_files",
+    "description": "删除工作目录内的文件或空目录，一次可传多个。删除前会逐个确认存在并汇总结果；目录必须为空才会删除。这是不可恢复的操作，删除前请先用 list_dir 确认目标。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "要删除的相对路径列表，如 [\"uploads/a.pdf\", \"diary.md\"]"
+        }
+      },
+      "required": ["paths"]
+    }
+  },
+  {
     "name": "list_dir",
     "description": "列出目录内的文件和子目录，带大小和类型。",
     "inputSchema": {
@@ -154,6 +169,7 @@ pub fn tool_names() -> Vec<&'static str> {
         "read_file",
         "write_file",
         "edit_file",
+        "delete_files",
         "list_dir",
         "search",
         "workspace_info",
@@ -485,6 +501,74 @@ fn edit_file(root: &Path, args: &Value) -> Result<String, String> {
     }
 }
 
+fn delete_files(root: &Path, args: &Value) -> Result<String, String> {
+    let paths: Vec<String> = args
+        .get("paths")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if paths.is_empty() {
+        return Err("paths 不能为空".into());
+    }
+
+    let mut deleted = Vec::new();
+    let mut failed = Vec::new();
+    for path in &paths {
+        // 拒绝删除工作目录本身，避免一次误操作清空整个工作区
+        if path.trim().is_empty() || path.trim() == "." {
+            failed.push(format!("{path}：不能删除工作目录"));
+            continue;
+        }
+        let target = match resolve(root, path) {
+            Ok(target) => target,
+            Err(error) => {
+                failed.push(format!("{path}：{error}"));
+                continue;
+            }
+        };
+        if target == root {
+            failed.push(format!("{path}：不能删除工作目录"));
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&target) else {
+            failed.push(format!("{path}：文件不存在"));
+            continue;
+        };
+        let outcome = if meta.is_dir() {
+            std::fs::remove_dir(&target)
+        } else {
+            std::fs::remove_file(&target)
+        };
+        match outcome {
+            Ok(()) => deleted.push(path.clone()),
+            Err(error) => failed.push(format!("{path}：{error}")),
+        }
+    }
+
+    let mut lines = Vec::new();
+    if deleted.is_empty() {
+        lines.push("没有删除任何文件。".to_string());
+    } else {
+        lines.push(format!("已删除 {} 个：", deleted.len()));
+        for path in &deleted {
+            lines.push(format!("- {path}"));
+        }
+    }
+    if !failed.is_empty() {
+        lines.push(format!("{} 个未删除：", failed.len()));
+        for item in &failed {
+            lines.push(format!("- {item}"));
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
 fn list_dir(root: &Path, args: &Value) -> Result<String, String> {
     let path = args.get("path").and_then(Value::as_str).unwrap_or("");
     let target = resolve(root, path)?;
@@ -621,6 +705,7 @@ pub fn call_with(
         "read_file" => read_file(root, args),
         "write_file" => write_file(root, args),
         "edit_file" => edit_file(root, args),
+        "delete_files" => delete_files(root, args),
         "list_dir" => list_dir(root, args),
         "search" => search(root, args),
         "workspace_info" => Ok(format!("当前工作目录：{}", root.display())),
@@ -962,6 +1047,68 @@ mod tests {
         std::fs::write(root.join("a.pdf"), b"not a real pdf").unwrap();
         let result = call(&root, "extract_pdf_images", &json!({ "path": "a.pdf" }));
         assert!(result.is_err(), "坏 PDF 应该报错");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deletes_multiple_files() {
+        let root = temp_root("delete-many");
+        for name in ["a.txt", "b.txt"] {
+            call(&root, "write_file", &json!({ "path": name, "content": "x" })).unwrap();
+        }
+        let out = call(&root, "delete_files", &json!({ "paths": ["a.txt", "b.txt"] })).unwrap();
+        assert!(out.contains("已删除 2 个"), "{out}");
+        assert!(!root.join("a.txt").exists());
+        assert!(!root.join("b.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_reports_missing_files_without_aborting() {
+        let root = temp_root("delete-missing");
+        call(&root, "write_file", &json!({ "path": "a.txt", "content": "x" })).unwrap();
+        let out = call(&root, "delete_files", &json!({ "paths": ["a.txt", "nope.txt"] })).unwrap();
+        assert!(out.contains("已删除 1 个"), "{out}");
+        assert!(out.contains("nope.txt"), "{out}");
+        assert!(out.contains("文件不存在"), "{out}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_refuses_workspace_root() {
+        let root = temp_root("delete-root");
+        for path in [".", ""] {
+            let out = call(&root, "delete_files", &json!({ "paths": [path] })).unwrap();
+            assert!(out.contains("不能删除工作目录"), "{out}");
+        }
+        assert!(root.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_rejects_paths_outside_workspace() {
+        let root = temp_root("delete-escape");
+        let out = call(&root, "delete_files", &json!({ "paths": ["../secret.txt"] })).unwrap();
+        assert!(out.contains("超出工作目录"), "{out}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_requires_non_empty_paths() {
+        let root = temp_root("delete-empty");
+        assert!(call(&root, "delete_files", &json!({ "paths": [] })).is_err());
+        assert!(call(&root, "delete_files", &json!({})).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_refuses_non_empty_directory() {
+        let root = temp_root("delete-dir");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/keep.txt"), b"x").unwrap();
+        let out = call(&root, "delete_files", &json!({ "paths": ["sub"] })).unwrap();
+        assert!(out.contains("未删除"), "{out}");
+        assert!(root.join("sub").exists(), "非空目录不应被删除");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -6,9 +6,13 @@ const LABELS = {
   run_shell: { title: "执行 cmd 命令", risk: "会在本机运行任意命令，可能修改或删除文件" },
   write_file: { title: "写入文件", risk: "会覆盖目标文件的全部内容" },
   edit_file: { title: "修改文件", risk: "会改写目标文件中的一段内容" },
+  delete_files: { title: "删除文件", risk: "删除后无法恢复，每次都会单独确认" },
   add_mcp_server: { title: "添加 MCP 服务", risk: "会启动一个新的本机进程并挂载它的工具" },
   remove_mcp_server: { title: "移除 MCP 服务", risk: "会停用该服务的全部工具" },
 };
+
+/** 这些工具不允许「记住选择」，每次都问。 */
+const ALWAYS_CONFIRM = new Set(["delete_files"]);
 
 function describe(tool) {
   return LABELS[tool] ?? { title: `调用 ${tool}`, risk: "外部服务提供的工具" };
@@ -30,6 +34,13 @@ function summarize(tool, args) {
     return {
       label: `将在 ${args.path ?? ""} 中替换`,
       value: `原文：\n${(args.old_text ?? "").slice(0, 300)}\n\n改为：\n${(args.new_text ?? "").slice(0, 300)}`,
+    };
+  }
+  if (tool === "delete_files") {
+    const paths = Array.isArray(args.paths) ? args.paths : [];
+    return {
+      label: `将永久删除 ${paths.length} 项`,
+      value: paths.length ? paths.map((path) => `- ${path}`).join("\n") : "（未提供路径）",
     };
   }
   if (tool === "add_mcp_server") {
@@ -130,6 +141,8 @@ export function initApprovalDialog() {
     subtitle.textContent = `工具 ${payload.server}__${payload.tool} · 模型请求执行`;
     label.textContent = detail.label;
     body.textContent = detail.value;
+    // 不可撤销的操作不提供「不再询问」
+    overlay.querySelector('[data-action="always"]').hidden = ALWAYS_CONFIRM.has(payload.tool);
     overlay.hidden = false;
     overlay.querySelector('[data-action="allow"]').focus();
   });

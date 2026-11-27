@@ -244,6 +244,35 @@ fn shorten(text: &str, limit: usize) -> String {
     kept
 }
 
+/// 只切换模型名，其余字段与密钥保持原样。
+#[tauri::command]
+pub fn set_active_model(
+    app: AppHandle,
+    model: String,
+    state: tauri::State<ModelSettings>,
+) -> Result<ModelConfigView, String> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return Err("模型名不能为空".into());
+    }
+    let mut current = state.0.lock().map_err(|error| error.to_string())?;
+    let mut next = current.clone();
+    next.model = trimmed.to_string();
+    save_file(&app, &next)?;
+    *current = next.clone();
+    Ok(ModelConfigView::from(&next))
+}
+
+/// 按已保存的配置拉取模型列表，供输入栏的模型选择器使用。
+#[tauri::command]
+pub async fn list_saved_models(state: tauri::State<'_, ModelSettings>) -> Result<Vec<String>, String> {
+    let (base_url, api_key) = {
+        let config = state.0.lock().map_err(|error| error.to_string())?;
+        (config.base_url.clone(), config.api_key.clone())
+    };
+    fetch_models(&base_url, &api_key).await
+}
+
 #[tauri::command]
 pub async fn list_models(
     provider: String,
@@ -265,6 +294,18 @@ pub async fn list_models(
     if key.is_empty() && !is_local_endpoint(base) {
         return Err("尚未设置 API Key，请先填写再获取模型列表".into());
     }
+    fetch_models(base, &key).await
+}
+
+/// 请求 `GET /models` 并解析出模型名列表。
+async fn fetch_models(base: &str, key: &str) -> Result<Vec<String>, String> {
+    let base = base.trim().trim_end_matches('/');
+    if !(base.starts_with("https://") || base.starts_with("http://")) {
+        return Err("接口地址必须以 http:// 或 https:// 开头".into());
+    }
+    if key.is_empty() && !is_local_endpoint(base) {
+        return Err("尚未设置 API Key，请先填写再获取模型列表".into());
+    }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(TEST_TIMEOUT_SECS))
@@ -273,7 +314,7 @@ pub async fn list_models(
     let url = format!("{base}/models");
     let mut request = client.get(&url);
     if !key.is_empty() {
-        request = request.bearer_auth(&key);
+        request = request.bearer_auth(key);
     }
     let response = request.send().await.map_err(|error| {
         if error.is_timeout() {
