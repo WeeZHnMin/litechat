@@ -111,7 +111,8 @@ export function settingsViewHtml() {
             <label for="workspace-path">工作目录</label>
             <div class="key-row">
               <input id="workspace-path" type="text" spellcheck="false" autocomplete="off" placeholder="选择目录" />
-              <button class="plain-button" id="workspace-save" type="button">保存</button>
+              <button class="plain-button" id="workspace-browse" type="button" title="选择目录">浏览</button>
+              <button class="plain-button" id="workspace-history" type="button" aria-haspopup="menu" aria-expanded="false" title="历史目录">历史</button>
             </div>
             <span class="field-hint" id="workspace-hint">所有相对路径都基于此目录</span>
           </div>

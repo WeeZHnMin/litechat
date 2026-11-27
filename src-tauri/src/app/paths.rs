@@ -52,7 +52,8 @@ pub fn workspace(app: &AppHandle) -> PathBuf {
     workspace_path(app)
         .ok()
         .and_then(|path| fs::read_to_string(path).ok())
-        .map(|text| PathBuf::from(text.trim()))
+        // 旧版本存进去的路径可能带 `\\?\` 前缀，读出来先剥掉
+        .map(|text| strip_verbatim(Path::new(text.trim())))
         .filter(|path| path.is_dir())
         .unwrap_or_else(|| {
             config_dir(app)
@@ -67,6 +68,55 @@ pub fn ensure_workspace(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// 历史工作目录最多记这么多条，最近的排前面。
+const MAX_WORKSPACE_HISTORY: usize = 10;
+
+fn history_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join("workspaces.json"))
+}
+
+/// 读取历史工作目录，过滤掉已经不存在的。
+pub fn workspace_history(app: &AppHandle) -> Vec<String> {
+    history_path(app)
+        .ok()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| Path::new(path).is_dir())
+        .collect()
+}
+
+/// 把目录记进历史：已存在则提到最前，只保留最近若干条。
+fn remember_workspace(app: &AppHandle, path: &Path) {
+    let value = path.display().to_string();
+    let Ok(target) = history_path(app) else {
+        return;
+    };
+    let mut list = workspace_history(app);
+    list.retain(|item| item != &value);
+    list.insert(0, value);
+    list.truncate(MAX_WORKSPACE_HISTORY);
+    if let Ok(bytes) = serde_json::to_vec_pretty(&list) {
+        let _ = fs::write(target, bytes);
+    }
+}
+
+/// Windows 的 canonicalize 会加 `\\?\` 前缀，显示在界面上很难看。
+/// 这里去掉它；UNC 路径还原成 `\\server\share` 形式。
+fn strip_verbatim(path: &Path) -> PathBuf {
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+    const VERBATIM: &str = r"\\?\";
+    let text = path.display().to_string();
+    if let Some(rest) = text.strip_prefix(VERBATIM_UNC) {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(VERBATIM) {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
 pub fn set_workspace(app: &AppHandle, value: &str) -> Result<PathBuf, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -76,12 +126,16 @@ pub fn set_workspace(app: &AppHandle, value: &str) -> Result<PathBuf, String> {
     if !path.is_dir() {
         return Err(format!("目录不存在: {trimmed}"));
     }
-    let absolute = path.canonicalize().map_err(|error| error.to_string())?;
+    let absolute = path
+        .canonicalize()
+        .map(|resolved| strip_verbatim(&resolved))
+        .map_err(|error| error.to_string())?;
     let target = workspace_path(app)?;
     if let Some(directory) = target.parent() {
         fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     }
     fs::write(target, absolute.display().to_string()).map_err(|error| error.to_string())?;
+    remember_workspace(app, &absolute);
     Ok(absolute)
 }
 
@@ -211,6 +265,42 @@ mod tests {
             "已存在的目录也要补齐内容"
         );
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn history_keeps_most_recent_first_and_dedups() {
+        // 直接验证列表处理逻辑：去重 + 最近优先
+        let mut list: Vec<String> = vec!["/a".into(), "/b".into()];
+        let value = "/c".to_string();
+        list.retain(|item| item != &value);
+        list.insert(0, value.clone());
+        assert_eq!(list, vec!["/c", "/a", "/b"]);
+
+        // 再次访问 /a，应提到最前而不是重复
+        list.retain(|item| item != "/a");
+        list.insert(0, "/a".into());
+        assert_eq!(list, vec!["/a", "/c", "/b"]);
+    }
+
+    #[test]
+    fn history_caps_at_limit() {
+        let mut list: Vec<String> = (0..MAX_WORKSPACE_HISTORY).map(|i| format!("/p{i}")).collect();
+        list.insert(0, "/new".into());
+        list.truncate(MAX_WORKSPACE_HISTORY);
+        assert_eq!(list.len(), MAX_WORKSPACE_HISTORY);
+        assert_eq!(list[0], "/new");
+    }
+
+    #[test]
+    fn verbatim_prefix_is_stripped() {
+        let plain = Path::new(r"C:\Users\me\workspace");
+        assert_eq!(strip_verbatim(plain), plain);
+
+        let verbatim = Path::new(r"\\?\C:\Users\me\workspace");
+        assert_eq!(strip_verbatim(verbatim), plain);
+
+        let unc = Path::new(r"\\?\UNC\server\share");
+        assert_eq!(strip_verbatim(unc), PathBuf::from(r"\\server\share"));
     }
 
     #[test]

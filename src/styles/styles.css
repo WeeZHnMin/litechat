@@ -413,6 +413,13 @@ button {
 
 .key-row .plain-button {
   height: 32px;
+  padding: 0 10px;
+}
+
+/* 路径类输入用等宽字体，反斜杠和空格才看得清 */
+.key-row input[type="text"] {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
 }
 
 .plain-button {
@@ -1210,6 +1217,11 @@ button {
 
 .permission-toggle {
   margin-left: 6px;
+}
+
+/* 目录按钮只显示一级目录名，不需要太宽 */
+.workspace-toggle {
+  max-width: 130px;
 }
 
 .composer-toolbar {

@@ -69,7 +69,7 @@ export function showContextMenu(x, y, items, { placement = "auto", searchable = 
       }
       if (item.danger) button.classList.add("is-danger");
       if (item.disabled) button.disabled = true;
-      button.title = item.label;
+      button.title = item.title ?? item.label;
       button.addEventListener("click", () => {
         closeContextMenu();
         void item.action?.();

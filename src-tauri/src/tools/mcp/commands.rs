@@ -105,6 +105,12 @@ pub fn save_folder(
         .map_err(|error| error.to_string())
 }
 
+/// 历史工作目录列表，供设置页快速切换。
+#[tauri::command]
+pub fn get_workspace_history(app: AppHandle) -> Result<Vec<String>, String> {
+    Ok(crate::app::paths::workspace_history(&app))
+}
+
 #[tauri::command]
 pub fn set_workspace(app: AppHandle, path: String) -> Result<String, String> {
     let resolved = crate::app::paths::set_workspace(&app, &path)?;

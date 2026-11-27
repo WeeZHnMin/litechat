@@ -32,6 +32,7 @@ export function renderShell() {
           <button class="icon-button plus-button" id="add-attachment" type="button" aria-label="添加附件" aria-haspopup="menu" aria-expanded="false" title="添加附件">${icon("plus")}</button>
           <button class="thinking-toggle" id="thinking-toggle" type="button" aria-pressed="false" title="开启后模型会先推理再回答">深度思考</button>
           <button class="thinking-toggle permission-toggle" id="permission-toggle" type="button" aria-pressed="false" aria-haspopup="menu" aria-expanded="false" title="工具执行权限">每次询问</button>
+          <button class="thinking-toggle workspace-toggle" id="workspace-toggle" type="button" aria-haspopup="menu" aria-expanded="false" title="工作目录">目录</button>
           <button class="stop-button" id="stop-generation" type="button" hidden>停止生成</button>
         </div>
       </section>
