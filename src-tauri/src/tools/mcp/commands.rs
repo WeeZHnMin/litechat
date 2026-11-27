@@ -69,6 +69,42 @@ pub fn save_attachment(app: AppHandle, name: String, data: String) -> Result<Str
     Ok(path)
 }
 
+/// 从本地路径导入文件夹（走原生目录选择时用），无需浏览器上传通道。
+#[tauri::command]
+pub fn import_folder(app: AppHandle, path: String) -> Result<crate::tools::mcp::uploads::FolderSaved, String> {
+    let root = app.state::<McpManager>().workspace();
+    crate::tools::mcp::uploads::import_folder(&root, std::path::Path::new(&path))
+        .map_err(|error| error.to_string())
+}
+
+/// 保存一整个文件夹：按相对路径还原目录结构，返回目录树文本。
+///
+/// 只给模型结构，不给全部内容——几百个文件全塞进上下文没有意义，
+/// 需要看具体文件时用 read_file 读取。
+#[tauri::command]
+pub fn save_folder(
+    app: AppHandle,
+    name: String,
+    files: Vec<crate::tools::mcp::uploads::FolderFile>,
+) -> Result<crate::tools::mcp::uploads::FolderSaved, String> {
+    use base64::Engine;
+    if files.is_empty() {
+        return Err("文件夹里没有文件".into());
+    }
+    let decoded: Vec<(String, Vec<u8>)> = files
+        .into_iter()
+        .map(|file| {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(file.data.as_bytes())
+                .map_err(|error| format!("{} 数据无效：{error}", file.path))?;
+            Ok((file.path, bytes))
+        })
+        .collect::<Result<_, String>>()?;
+    let root = app.state::<McpManager>().workspace();
+    crate::tools::mcp::uploads::save_folder(&root, &name, &decoded)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub fn set_workspace(app: AppHandle, path: String) -> Result<String, String> {
     let resolved = crate::app::paths::set_workspace(&app, &path)?;

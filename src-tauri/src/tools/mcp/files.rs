@@ -58,14 +58,18 @@ const TOOLS: &str = r#"[
   },
   {
     "name": "delete_files",
-    "description": "删除工作目录内的文件或空目录，一次可传多个。删除前会逐个确认存在并汇总结果；目录必须为空才会删除。这是不可恢复的操作，删除前请先用 list_dir 确认目标。",
+    "description": "删除工作目录内的文件或目录，一次可传多个。目录默认连同其全部内容一起删除。这是不可恢复的操作，执行前会弹窗让用户确认；删除前建议先用 list_dir 确认目标。",
     "inputSchema": {
       "type": "object",
       "properties": {
         "paths": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "要删除的相对路径列表，如 [\"uploads/a.pdf\", \"diary.md\"]"
+          "description": "要删除的相对路径列表，如 [\"uploads/a.pdf\", \"uploads/old-project\"]"
+        },
+        "recursive": {
+          "type": "boolean",
+          "description": "删除目录时是否连同内容一起删，默认 true。设为 false 则只能删空目录。"
         }
       },
       "required": ["paths"]
@@ -517,6 +521,13 @@ fn delete_files(root: &Path, args: &Value) -> Result<String, String> {
         return Err("paths 不能为空".into());
     }
 
+    // 默认递归：用户说「删除这个文件夹」时期望删干净，
+    // 而不是遇到非空目录就报错让人自己再逐个删。
+    let recursive = args
+        .get("recursive")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
     let mut deleted = Vec::new();
     let mut failed = Vec::new();
     for path in &paths {
@@ -540,12 +551,24 @@ fn delete_files(root: &Path, args: &Value) -> Result<String, String> {
             failed.push(format!("{path}：文件不存在"));
             continue;
         };
-        let outcome = if meta.is_dir() {
-            std::fs::remove_dir(&target)
+        if !meta.is_dir() {
+            match std::fs::remove_file(&target) {
+                Ok(()) => deleted.push(path.clone()),
+                Err(error) => failed.push(format!("{path}：{error}")),
+            }
+            continue;
+        }
+
+        // 目录：先数一下内含文件数，好让用户知道删掉了多少东西
+        let mut count = 0usize;
+        count_entries(&target, &mut count);
+        let outcome = if recursive {
+            std::fs::remove_dir_all(&target)
         } else {
-            std::fs::remove_file(&target)
+            std::fs::remove_dir(&target)
         };
         match outcome {
+            Ok(()) if count > 0 => deleted.push(format!("{path}（含 {count} 个文件）")),
             Ok(()) => deleted.push(path.clone()),
             Err(error) => failed.push(format!("{path}：{error}")),
         }
@@ -567,6 +590,24 @@ fn delete_files(root: &Path, args: &Value) -> Result<String, String> {
         }
     }
     Ok(lines.join("\n"))
+}
+
+/// 递归统计目录内的文件数，用于回报「删掉了多少个文件」。
+fn count_entries(dir: &Path, count: &mut usize) {
+    if *count > 10_000 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            count_entries(&path, count);
+        } else {
+            *count += 1;
+        }
+    }
 }
 
 fn list_dir(root: &Path, args: &Value) -> Result<String, String> {
@@ -1102,13 +1143,41 @@ mod tests {
     }
 
     #[test]
-    fn delete_refuses_non_empty_directory() {
+    fn delete_removes_directory_with_contents_by_default() {
         let root = temp_root("delete-dir");
+        std::fs::create_dir_all(root.join("sub/nested")).unwrap();
+        std::fs::write(root.join("sub/a.txt"), b"x").unwrap();
+        std::fs::write(root.join("sub/nested/b.txt"), b"y").unwrap();
+        let out = call(&root, "delete_files", &json!({ "paths": ["sub"] })).unwrap();
+        assert!(out.contains("已删除"), "{out}");
+        assert!(out.contains("2 个文件"), "应报告删除的文件数：{out}");
+        assert!(!root.join("sub").exists(), "目录应被完整删除");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_can_be_limited_to_empty_directories() {
+        let root = temp_root("delete-dir-strict");
         std::fs::create_dir_all(root.join("sub")).unwrap();
         std::fs::write(root.join("sub/keep.txt"), b"x").unwrap();
-        let out = call(&root, "delete_files", &json!({ "paths": ["sub"] })).unwrap();
+        let out = call(
+            &root,
+            "delete_files",
+            &json!({ "paths": ["sub"], "recursive": false }),
+        )
+        .unwrap();
         assert!(out.contains("未删除"), "{out}");
-        assert!(root.join("sub").exists(), "非空目录不应被删除");
+        assert!(root.join("sub").exists(), "recursive=false 时不应删非空目录");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn delete_removes_empty_directory() {
+        let root = temp_root("delete-empty-dir");
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        let out = call(&root, "delete_files", &json!({ "paths": ["empty"] })).unwrap();
+        assert!(out.contains("已删除"), "{out}");
+        assert!(!root.join("empty").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

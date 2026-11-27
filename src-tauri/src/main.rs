@@ -9,6 +9,7 @@ fn main() {
     tauri::Builder::default()
         .manage(app::shortcuts::ShortcutSettings::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -53,6 +54,8 @@ fn main() {
             tools::mcp::commands::get_workspace,
             tools::mcp::commands::set_workspace,
             tools::mcp::commands::save_attachment,
+            tools::mcp::commands::save_folder,
+            tools::mcp::commands::import_folder,
             tools::mcp::commands::open_workspace_file,
             agent::permissions::respond_approval,
             agent::permissions::get_permission_state,

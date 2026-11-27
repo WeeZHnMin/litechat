@@ -9,7 +9,7 @@ const MAX_OUTPUT: usize = 20_000;
 const TOOLS: &str = r#"[
   {
     "name": "run_command",
-    "description": "在 Windows 上执行一条 PowerShell 命令并返回输出。适合查询系统信息、列目录、查看进程等只读操作。不要执行删除、格式化、修改系统配置等破坏性操作。",
+    "description": "在 Windows 上执行一条 PowerShell 命令并返回输出。适合查询系统信息、列目录、查看进程等操作。删除文件请用 delete_files 工具，不要在这里执行 Remove-Item 或 del；格式化磁盘、修改系统配置等破坏性操作也不要在这里做。",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -21,7 +21,7 @@ const TOOLS: &str = r#"[
   },
   {
     "name": "run_shell",
-    "description": "通过 cmd.exe 执行一条命令并返回输出。用于 PowerShell 无法覆盖的场景。同样避免破坏性操作。",
+    "description": "通过 cmd.exe 执行一条命令并返回输出。用于 PowerShell 无法覆盖的场景。删除文件请用 delete_files，不要在这里执行 del 或 rd。",
     "inputSchema": {
       "type": "object",
       "properties": {

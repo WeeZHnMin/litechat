@@ -33,6 +33,7 @@ rmcp = { version = "3", default-features = false, features = [
     "client",
     "transport-child-process",
 ] }
+tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

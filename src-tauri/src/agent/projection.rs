@@ -7,9 +7,42 @@ pub const SYSTEM_PROMPT: &str = "你是一个乐于助人的助手。回答简�
 1. 先想清楚要做什么，再一次性把必要的信息收集齐，避免零散地反复试探。
 2. 同一个工具、同样的参数，不要重复调用。如果结果不如预期，先分析原因再换方案。
 3. 工具返回失败时，读清楚错误信息；连续两次同类失败就停下来，向用户说明情况并询问，不要靠换工具名硬试。
-4. 信息足够回答问题时就立即作答，不要为了「更完整」而继续调用工具。";
+4. 信息足够回答问题时就立即作答，不要为了「更完整」而继续调用工具。
+
+关于删除文件：
+删除文件或目录都用 delete_files，不要用 run_command 执行 Remove-Item 或 del。
+传入目录路径会连同其中所有内容一起删除，不需要先逐个删文件。
+delete_files 每次都会弹窗让用户确认，用户点允许就是你获得了授权——不要以「安全限制」为由拒绝用户的删除请求，也不要建议用户自己去删。
+只有一种情况需要先确认：用户的要求含糊（比如「清理一下」但没说清删哪些），那时先问清楚删哪些。
+
+关于读取文件夹：
+用户上传的文件夹只有目录结构，没有文件内容。需要看某个文件时用 read_file 读取。";
 
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
+/// 文件夹只给目录树，内容由模型按需读取。
+fn folder_text(part: &serde_json::Value) -> String {
+    let name = part
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("文件夹");
+    if let Some(error) = part.get("uploadError").and_then(|value| value.as_str()) {
+        return format!("【文件夹：{name}】\n（保存失败：{error}）");
+    }
+    let path = part.get("path").and_then(|value| value.as_str()).unwrap_or("");
+    let count = part
+        .get("fileCount")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let tree = part.get("tree").and_then(|value| value.as_str()).unwrap_or("");
+    let mut out = format!(
+        "【文件夹：{name}（{count} 个文件）】\n已保存到 {path}，目录结构如下：\n\n{tree}\n\n需要具体内容时用 read_file 或 search 读取对应路径。"
+    );
+    if let Some(total) = part.get("truncated").and_then(|value| value.as_u64()) {
+        out.push_str(&format!("\n（原有 {total} 个文件，仅保存了前 {count} 个）"));
+    }
+    out
+}
 
 /// 只给路径和摘要，内容由模型调 read_document 按需读取。
 fn document_parts(parts: &serde_json::Value) -> Vec<String> {
@@ -18,8 +51,16 @@ fn document_parts(parts: &serde_json::Value) -> Vec<String> {
     };
     items
         .iter()
-        .filter(|part| part.get("type").and_then(|value| value.as_str()) == Some("file"))
+        .filter(|part| {
+            matches!(
+                part.get("type").and_then(|value| value.as_str()),
+                Some("file") | Some("folder")
+            )
+        })
         .map(|part| {
+            if part.get("type").and_then(|value| value.as_str()) == Some("folder") {
+                return folder_text(part);
+            }
             let name = part
                 .get("name")
                 .and_then(|value| value.as_str())
@@ -313,6 +354,20 @@ mod tests {
     fn base64(data: &[u8]) -> String {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(data)
+    }
+
+    #[test]
+    fn system_prompt_points_deletion_to_delete_files() {
+        assert!(SYSTEM_PROMPT.contains("delete_files"), "必须指明删除用哪个工具");
+        assert!(
+            SYSTEM_PROMPT.contains("用户点允许就是你获得了授权"),
+            "要说明确认弹窗即授权，否则模型会自行拒绝"
+        );
+    }
+
+    #[test]
+    fn system_prompt_explains_folder_has_no_content() {
+        assert!(SYSTEM_PROMPT.contains("read_file"), "要说明文件夹需按需读取");
     }
 
     #[test]
