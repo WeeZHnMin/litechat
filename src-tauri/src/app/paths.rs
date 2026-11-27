@@ -2,15 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
-const CONFIG_DIR: &str = ".litechat";
-const CONFIG_FILES: [&str; 2] = ["models.json", "shortcuts.json"];
+/// 用户主目录下的应用目录，存放配置、数据库和默认工作目录。
+const APP_DIR: &str = "LiteChat";
 
-fn project_root() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    exe.ancestors()
-        .skip(1)
-        .find(|dir| dir.join("src-tauri").join("tauri.conf.json").is_file())
-        .map(Path::to_path_buf)
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
 }
 
 fn overridden_dir() -> Option<PathBuf> {
@@ -27,8 +25,8 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(dir) = overridden_dir() {
         return Ok(dir);
     }
-    if let Some(root) = project_root() {
-        return Ok(root.join(CONFIG_DIR));
+    if let Some(home) = home_dir() {
+        return Ok(home.join(APP_DIR));
     }
     app.path()
         .app_config_dir()
@@ -45,9 +43,8 @@ fn workspace_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn default_workspace() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
+    home_dir()
+        .map(|home| home.join(APP_DIR).join(DEFAULT_WORKSPACE_DIR))
         .unwrap_or_else(std::env::temp_dir)
 }
 
@@ -88,20 +85,88 @@ pub fn set_workspace(app: &AppHandle, value: &str) -> Result<PathBuf, String> {
     Ok(absolute)
 }
 
-pub fn ensure(app: &AppHandle) -> Result<PathBuf, String> {
-    let target = config_dir(app)?;
-    fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+/// 旧版本把配置放在项目根或 Tauri 默认的 appConfig 目录，
+/// 首次启动时把这些文件搬过来，避免用户丢失历史记录。
+fn migrate_legacy(app: &AppHandle, target: &Path) {
+    let mut sources: Vec<PathBuf> = Vec::new();
+    // 开发时项目根目录下的 .litechat
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(root) = exe
+            .ancestors()
+            .skip(1)
+            .find(|dir| dir.join("src-tauri").join("tauri.conf.json").is_file())
+        {
+            sources.push(root.join(".litechat"));
+        }
+    }
     if let Ok(legacy) = app.path().app_config_dir() {
-        if legacy != target {
-            for name in CONFIG_FILES {
-                let source = legacy.join(name);
-                let destination = target.join(name);
-                if source.is_file() && !destination.exists() {
-                    let _ = fs::copy(&source, &destination);
+        sources.push(legacy);
+    }
+
+    for source in sources {
+        if source == target || !source.is_dir() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&source) else {
+            continue;
+        };
+        let mut items: Vec<(String, PathBuf)> = entries
+            .flatten()
+            .map(|entry| {
+                (
+                    entry.file_name().to_string_lossy().to_string(),
+                    entry.path(),
+                )
+            })
+            .collect();
+
+        // SQLite 的 -wal 和 -shm 必须跟主库一起迁移，且主库要先落位；
+        // read_dir 顺序不保证，这里显式排序。
+        items.sort_by_key(|(name, _)| match name.as_str() {
+            "history.db" => 0,
+            "history.db-wal" => 1,
+            "history.db-shm" => 2,
+            _ => 3,
+        });
+
+        // 目标已有主库时说明迁移过一次了，别再拷半套 SQLite 文件
+        let db_exists = target.join("history.db").exists();
+
+        for (name, path) in items {
+            if db_exists && name.starts_with("history.db") {
+                continue;
+            }
+            let destination = target.join(path.file_name().unwrap_or_default());
+            if path.is_file() {
+                if !destination.exists() {
+                    let _ = fs::copy(&path, &destination);
                 }
+            } else if path.is_dir() {
+                // 目录已存在也要往里补，否则空目录会挡掉整个子树的迁移
+                let _ = copy_dir(&path, &destination);
             }
         }
     }
+}
+
+fn copy_dir(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)?.flatten() {
+        let path = entry.path();
+        let target = destination.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir(&path, &target)?;
+        } else if !target.exists() {
+            let _ = fs::copy(&path, &target);
+        }
+    }
+    Ok(())
+}
+
+pub fn ensure(app: &AppHandle) -> Result<PathBuf, String> {
+    let target = config_dir(app)?;
+    fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+    migrate_legacy(app, &target);
     Ok(target)
 }
 
@@ -110,22 +175,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_workspace_dir_is_not_the_config_dir_itself() {
-        assert_ne!(DEFAULT_WORKSPACE_DIR, "");
-        assert!(DEFAULT_WORKSPACE_DIR.contains("workspace"));
-    }
-
-    #[test]
-    fn workspace_lives_under_config_dir() {
-        let config = PathBuf::from(r"C:\data\.litechat");
-        let expected = config.join(DEFAULT_WORKSPACE_DIR);
+    fn workspace_is_a_subdirectory_of_the_app_dir() {
+        assert_eq!(DEFAULT_WORKSPACE_DIR, "workspace");
+        let expected = home_dir()
+            .map(|home| home.join(APP_DIR).join(DEFAULT_WORKSPACE_DIR))
+            .unwrap();
         assert!(expected.ends_with("workspace"));
-        assert!(expected.starts_with(r"C:\data\.litechat"));
     }
 
     #[test]
-    fn fallback_workspace_is_a_directory() {
-        let fallback = default_workspace();
-        assert!(fallback.is_dir(), "回退目录应存在：{}", fallback.display());
+    fn default_workspace_points_into_the_user_home() {
+        let workspace = default_workspace();
+        assert!(
+            workspace.ends_with(Path::new(APP_DIR).join(DEFAULT_WORKSPACE_DIR)),
+            "默认工作目录应在 用户目录/{APP_DIR}/{DEFAULT_WORKSPACE_DIR} 下：{}",
+            workspace.display()
+        );
+    }
+
+    #[test]
+    fn copy_dir_merges_into_existing_directory() {
+        let base = std::env::temp_dir().join(format!("litechat-migrate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let source = base.join("source");
+        let target = base.join("target");
+        fs::create_dir_all(source.join("uploads")).unwrap();
+        fs::write(source.join("uploads/a.txt"), b"file").unwrap();
+        // 目标里已有同名目录，但没有内容
+        fs::create_dir_all(&target).unwrap();
+
+        copy_dir(&source, &target).unwrap();
+
+        assert!(
+            target.join("uploads/a.txt").is_file(),
+            "已存在的目录也要补齐内容"
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn app_dir_name_is_not_hidden() {
+        // 放在用户主目录下，不该是点开头的隐藏目录
+        assert!(!APP_DIR.starts_with('.'));
     }
 }
