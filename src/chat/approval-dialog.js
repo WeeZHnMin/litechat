@@ -6,14 +6,14 @@ const LABELS = {
   run_shell: { title: "执行 cmd 命令", risk: "会在本机运行任意命令，可能修改或删除文件" },
   write_file: { title: "写入文件", risk: "会覆盖目标文件的全部内容" },
   edit_file: { title: "修改文件", risk: "会改写目标文件中的一段内容" },
-  delete_files: { title: "删除文件", risk: "删除后无法恢复，每次都会单独确认" },
+  delete_files: { title: "删除文件", risk: "删除后无法恢复；可以选「不再询问」让同类删除以后直接执行" },
   add_mcp_server: { title: "添加 MCP 服务", risk: "会启动一个新的本机进程并挂载它的工具" },
   remove_mcp_server: { title: "移除 MCP 服务", risk: "会停用该服务的全部工具" },
 };
 
 /** 这些工具不允许「记住选择」，每次都问。只对内置服务生效，
  *  与后端 needs_confirmation_every_time 保持一致。 */
-const ALWAYS_CONFIRM = new Set(["delete_files"]);
+const ALWAYS_CONFIRM = new Set();
 const BUILTIN_SERVER = "shell";
 
 function describe(tool) {
@@ -143,9 +143,12 @@ export function initApprovalDialog() {
     subtitle.textContent = `工具 ${payload.server}__${payload.tool} · 模型请求执行`;
     label.textContent = detail.label;
     body.textContent = detail.value;
-    // 不可撤销的操作不提供「不再询问」
+    // ALWAYS_CONFIRM 里的工具不给「不再询问」；目前集合为空，保留机制备用
     const locked = payload.server === BUILTIN_SERVER && ALWAYS_CONFIRM.has(payload.tool);
     overlay.querySelector('[data-action="always"]').hidden = locked;
+    // 删除是唯一无法撤销的操作，按钮文案直接说明后果
+    overlay.querySelector('[data-action="always"]').textContent =
+      payload.tool === "delete_files" ? "删除不再询问" : "此工具不再询问";
     overlay.hidden = false;
     overlay.querySelector('[data-action="allow"]').focus();
   });

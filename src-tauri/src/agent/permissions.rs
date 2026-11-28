@@ -147,7 +147,11 @@ impl Permissions {
 
 /// 无论哪种审批模式，这些工具都必须逐个确认。
 /// 放这里的是不可撤销的操作——删掉就没了，不能靠「全部允许」跳过。
-pub const ALWAYS_CONFIRM_TOOLS: [&str; 1] = ["delete_files"];
+///
+/// 目前为空：删除允许用户选择「不再询问」。
+/// 真正的保护在工作目录边界——路径不能越界，工作目录本身删不掉，
+/// 所以放开的只是「同一个目录里反复删」的重复确认，不是删除能力本身。
+pub const ALWAYS_CONFIRM_TOOLS: [&str; 0] = [];
 
 fn needs_confirmation_every_time(tool: &str, server: &str) -> bool {
     server == crate::tools::mcp::BUILTIN_SERVER && ALWAYS_CONFIRM_TOOLS.contains(&tool)
@@ -551,22 +555,29 @@ mod tests {
     }
 
     #[test]
-    fn delete_always_requires_approval_in_every_mode() {
-        for mode in [ApprovalMode::Ask, ApprovalMode::Session, ApprovalMode::Always] {
-            let mut inner = fresh(mode);
-            // 即使把它记进白名单也不放行
-            inner
-                .always_allowed
-                .insert(permission_key("shell", "delete_files"));
-            inner
-                .session_allowed
-                .insert(permission_key("shell", "delete_files"));
-            assert_eq!(
-                decide(&inner, "delete_files", "shell"),
-                Decision::Ask,
-                "{mode:?} 模式下删除也必须确认"
-            );
-        }
+    fn delete_is_never_treated_as_read_only() {
+        // 删除依然要确认，只是可以记住选择；免确认只能来自用户显式授权
+        let inner = fresh(ApprovalMode::Ask);
+        assert_eq!(decide(&inner, "delete_files", "shell"), Decision::Ask);
+    }
+
+    #[test]
+    fn delete_can_be_remembered_per_mode() {
+        let permissions = Permissions::in_memory();
+        permissions.set_mode(ApprovalMode::Ask);
+        assert!(permissions.needs_approval("delete_files", "shell"));
+        // 用户在确认框里点「删除不再询问」
+        permissions.remember_in_current_mode("shell", "delete_files");
+        assert!(!permissions.needs_approval("delete_files", "shell"));
+        // 只放开删除本身，别的写操作照旧要问
+        assert!(permissions.needs_approval("write_file", "shell"));
+    }
+
+    #[test]
+    fn always_confirm_set_is_empty_but_mechanism_intact() {
+        // 名单空了，机制保留：往里加工具仍会强制每次确认
+        assert!(ALWAYS_CONFIRM_TOOLS.is_empty());
+        assert!(!needs_confirmation_every_time("delete_files", "shell"));
     }
 
     #[test]
