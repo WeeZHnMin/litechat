@@ -11,6 +11,13 @@
   box-sizing: border-box;
 }
 
+/* hidden 属性自带的是低优先级 display:none，
+   任何显式 display（inline-flex 等）都会把它盖掉。
+   这里统一兜底，避免「该藏的元素仍然显示」。 */
+[hidden] {
+  display: none !important;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: rgb(0 0 0 / 18%) transparent;
