@@ -207,5 +207,7 @@ export function initHistory(manager, options) {
     toggleButton: document.querySelector("#history-button"),
     initialFocus: document.querySelector("#history-list"),
     ...options,
+    // Esc 返回聊天后直接能继续打字（放在展开之后，避免被 options 覆盖）
+    returnFocus: document.querySelector("#message-input"),
   });
 }

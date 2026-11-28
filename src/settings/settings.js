@@ -70,5 +70,7 @@ export function initSettings(manager) {
     element: document.querySelector("#settings-view"),
     toggleButton: document.querySelector("#settings-button"),
     initialFocus: document.querySelector("#settings-back"),
+    // Esc / 返回按钮回到聊天后直接能继续打字
+    returnFocus: document.querySelector("#message-input"),
   });
 }

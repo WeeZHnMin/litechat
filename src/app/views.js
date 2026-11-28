@@ -21,12 +21,14 @@ export class View {
 }
 
 export class PanelView extends View {
-  constructor({ name, manager, element, toggleButton = null, initialFocus = null }) {
+  constructor({ name, manager, element, toggleButton = null, initialFocus = null, returnFocus = null }) {
     super({ name });
     this.manager = manager;
     this.element = element;
     this.toggleButton = toggleButton;
     this.initialFocus = initialFocus;
+    // 从这个面板返回聊天时要聚焦的元素；没给就回到打开它的按钮
+    this.returnFocus = returnFocus;
   }
 
   get isOpen() {
@@ -99,7 +101,8 @@ export class ViewManager {
     view.deactivate();
     this.active = null;
     this.setChatVisible(true);
-    (view.toggleButton ?? this.composer).focus?.();
+    // 回到聊天就回到输入框；没指定时才退回到打开它的按钮
+    (view.returnFocus ?? view.toggleButton ?? this.composer).focus?.();
   }
 
   closeActive() {

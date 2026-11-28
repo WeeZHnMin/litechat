@@ -155,6 +155,18 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
     renderAttachments();
   }
 
+  /** 清空文本和草稿，但保留已选的附件。 */
+  function clearText() {
+    input.value = "";
+    historyIndex = -1;
+    draft = "";
+  }
+
+  /** 有没有需要 Esc 取消的内容：文字或附件。 */
+  function hasInput() {
+    return Boolean(input.value.trim() || selectedFiles.length || selectedFolder);
+  }
+
   function recall(index) {
     historyIndex = index;
     input.value = index >= sentTexts.length ? draft : sentTexts[index];
@@ -594,6 +606,8 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
 
   return {
     reset,
+    clearText,
+    hasInput,
     focus: () => input.focus(),
     setText,
     setBusy,

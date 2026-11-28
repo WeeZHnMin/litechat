@@ -80,8 +80,16 @@ manager.register(history).register(settings);
 manager.setBaseline(
   new ChatView({
     name: "chat",
+    // 聊天界面按 Esc：有内容先清掉，空了才收起到托盘。
+    // 直接收起太容易误触——用户以为 Esc 是取消，结果窗口没了。
     onEscape: () => {
+      if (composer.hasInput()) {
+        composer.reset();
+        composer.focus();
+        return true;
+      }
       if (window.__TAURI_INTERNALS__) void invoke("minimize_window");
+      return true;
     },
   }),
 );
