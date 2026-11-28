@@ -15,7 +15,7 @@
     "@tauri-apps/plugin-opener": "^2.7.3",
     "dompurify": "^3.4.18",
     "highlight.js": "^11.12.0",
-    "katex": "^0.16.22",
+    "katex": "^0.18.11",
     "marked": "^18.2.1",
     "marked-katex-extension": "^5.1.13"
   },

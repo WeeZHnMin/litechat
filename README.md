@@ -110,7 +110,7 @@ pnpm tauri build    # 打包
 | 会话内记住 | 本会话允许过的工具不再问 |
 | 全部允许 | 直接执行 |
 
-只读工具（`read_*`、`list_*`、`get_*`、`search*`）默认免确认。写文件、执行命令、增删 MCP 服务需要确认。
+只有内置服务的只读工具（`read_file`、`list_dir`、`search`、`read_document`、`read_media_file` 等）默认免确认。外部 MCP 服务的工具一律需要确认——服务可以随便给工具起名，`read_*` 不代表真的只读。写文件、执行命令、增删 MCP 服务同样需要确认，`delete_files` 在任何模式下都要逐个确认。
 
 ## 快捷键
 

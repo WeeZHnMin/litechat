@@ -24,14 +24,14 @@ importers:
         specifier: ^11.12.0
         version: 11.12.0
       katex:
-        specifier: ^0.16.22
-        version: 0.16.22
+        specifier: ^0.18.11
+        version: 0.18.11
       marked:
         specifier: ^18.2.1
         version: 18.2.1
       marked-katex-extension:
         specifier: ^5.1.13
-        version: 5.1.13(katex@0.16.22)(marked@18.2.1)
+        version: 5.1.13(katex@0.18.11)(marked@18.2.1)
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2.8.0
@@ -432,9 +432,9 @@ packages:
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
 
-  commander@8.3.0:
-    resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
-    engines: {node: '>= 12'}
+  commander@15.1.0:
+    resolution: {integrity: sha512-cgnQ88TRrWcC7pVq46RzJVRMktu3W2RcbnoidnfBsl1bmDCBwJS/udcIZpKoCrbAYYaCqsz1yZCVIgbIaU3ddQ==}
+    engines: {node: '>=22.12.0'}
 
   dompurify@3.4.18:
     resolution: {integrity: sha512-ofe3wI/uNm68HInABYFJYqQxRw1EaKAjNdrFVKqjUY+UZurvNd2L/HuQe097s/4RivWiZyP6tT7aoT8atjfhwg==}
@@ -462,8 +462,8 @@ packages:
     resolution: {integrity: sha512-nbfWpyRMcMrPMmDwJB+dhX/eiaPKtc2RB+0QZskqJ3WjRA/FDS0e9hZrx8EC/lbEv8gXy98FcDbNa/dspAaJMg==}
     engines: {node: '>=12.0.0'}
 
-  katex@0.16.22:
-    resolution: {integrity: sha512-XCHRdUw4lf3SKBaJe4EvgqIuWwkPSo9XoeO8GjQW94Bp7TWv9hNhzZjZ+OH9yf1UmLygb7DIT5GSFQiyt16zYg==}
+  katex@0.18.11:
+    resolution: {integrity: sha512-yvyz/2VMKqoho/35Hat5w37wIEdWJ5ElVMidTAlWrxr5uW4aBGsEpveTmKh18/zw08v/7lGswCPon4OhqmqrTA==}
     hasBin: true
 
   marked-katex-extension@5.1.13:
@@ -766,7 +766,7 @@ snapshots:
   '@types/trusted-types@2.0.7':
     optional: true
 
-  commander@8.3.0: {}
+  commander@15.1.0: {}
 
   dompurify@3.4.18:
     optionalDependencies:
@@ -810,13 +810,13 @@ snapshots:
 
   highlight.js@11.12.0: {}
 
-  katex@0.16.22:
+  katex@0.18.11:
     dependencies:
-      commander: 8.3.0
+      commander: 15.1.0
 
-  marked-katex-extension@5.1.13(katex@0.16.22)(marked@18.2.1):
+  marked-katex-extension@5.1.13(katex@0.18.11)(marked@18.2.1):
     dependencies:
-      katex: 0.16.22
+      katex: 0.18.11
       marked: 18.2.1
 
   marked@18.2.1: {}

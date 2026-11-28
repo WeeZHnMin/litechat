@@ -11,8 +11,10 @@ const LABELS = {
   remove_mcp_server: { title: "移除 MCP 服务", risk: "会停用该服务的全部工具" },
 };
 
-/** 这些工具不允许「记住选择」，每次都问。 */
+/** 这些工具不允许「记住选择」，每次都问。只对内置服务生效，
+ *  与后端 needs_confirmation_every_time 保持一致。 */
 const ALWAYS_CONFIRM = new Set(["delete_files"]);
+const BUILTIN_SERVER = "shell";
 
 function describe(tool) {
   return LABELS[tool] ?? { title: `调用 ${tool}`, risk: "外部服务提供的工具" };
@@ -96,10 +98,10 @@ export function initApprovalDialog() {
 
   async function respond(allowed, remember) {
     if (!pending) return;
-    const { id, tool } = pending;
+    const { id } = pending;
     close();
     try {
-      await invoke("respond_approval", { id, allowed, remember, tool });
+      await invoke("respond_approval", { id, allowed, remember });
     } catch (error) {
       console.error("Unable to respond to approval:", error);
     }
@@ -142,7 +144,8 @@ export function initApprovalDialog() {
     label.textContent = detail.label;
     body.textContent = detail.value;
     // 不可撤销的操作不提供「不再询问」
-    overlay.querySelector('[data-action="always"]').hidden = ALWAYS_CONFIRM.has(payload.tool);
+    const locked = payload.server === BUILTIN_SERVER && ALWAYS_CONFIRM.has(payload.tool);
+    overlay.querySelector('[data-action="always"]').hidden = locked;
     overlay.hidden = false;
     overlay.querySelector('[data-action="allow"]').focus();
   });

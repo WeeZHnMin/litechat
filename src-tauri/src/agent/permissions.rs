@@ -3,14 +3,16 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
-pub const READ_ONLY_TOOLS: [&str; 8] = [
+pub const READ_ONLY_TOOLS: [&str; 10] = [
     "read_file",
     "list_dir",
     "search",
     "workspace_info",
     "list_tools",
-    "get_file_info",
-    "read_multiple_text_files",
+    "read_binary_info",
+    "read_document",
+    "extract_pdf_images",
+    "render_pdf_pages",
     "read_media_file",
 ];
 
@@ -48,7 +50,32 @@ pub(crate) struct Inner {
     mode: ApprovalMode,
     always_allowed: HashSet<String>,
     session_allowed: HashSet<String>,
-    pending: Option<(String, tokio::sync::oneshot::Sender<bool>)>,
+    pending: Option<Pending>,
+}
+
+/// 待确认的请求由后端自己记录工具名与归属服务，
+/// 不采信前端回传的值——否则渲染层可以谎报工具名解锁另一个工具。
+struct Pending {
+    id: String,
+    tool: String,
+    server: String,
+    sender: tokio::sync::oneshot::Sender<bool>,
+}
+
+/// 白名单键必须带服务前缀：不同服务可以有同名工具，
+/// 只按裸名字记录会让 A 服务的授权顺带放开 B 服务。
+fn permission_key(server: &str, tool: &str) -> String {
+    format!("{server}__{tool}")
+}
+
+/// 旧版只存裸工具名，读出来补上服务前缀；
+/// 否则升级后已有的「不再询问」全部失效。
+fn migrate_key(stored: String) -> String {
+    if stored.contains("__") {
+        stored
+    } else {
+        permission_key(crate::tools::mcp::BUILTIN_SERVER, &stored)
+    }
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -76,7 +103,11 @@ impl Permissions {
         Self {
             inner: Mutex::new(Inner {
                 mode: stored.mode,
-                always_allowed: stored.always_allowed.into_iter().collect(),
+                always_allowed: stored
+                    .always_allowed
+                    .into_iter()
+                    .map(migrate_key)
+                    .collect(),
                 session_allowed: HashSet::new(),
                 pending: None,
             }),
@@ -122,19 +153,11 @@ fn needs_confirmation_every_time(tool: &str, server: &str) -> bool {
     server == crate::tools::mcp::BUILTIN_SERVER && ALWAYS_CONFIRM_TOOLS.contains(&tool)
 }
 
+/// 只有内置服务的工具走显式白名单免审批。
+/// 外部 MCP 服务的工具名不可信，一律不自动放行——
+/// 恶意服务可以把破坏性工具命名为 read_* 来绕过前缀规则。
 fn is_read_only(tool: &str, server: &str) -> bool {
-    if server == crate::tools::mcp::BUILTIN_SERVER {
-        if READ_ONLY_TOOLS.contains(&tool) {
-            return true;
-        }
-    }
-    tool.starts_with("read_")
-        || tool.starts_with("list_")
-        || tool.starts_with("get_")
-        || tool.starts_with("search")
-        || tool == "memory__search_nodes"
-        || tool == "memory__open_nodes"
-        || tool == "memory__read_graph"
+    server == crate::tools::mcp::BUILTIN_SERVER && READ_ONLY_TOOLS.contains(&tool)
 }
 
 pub(crate) fn decide(inner: &Inner, tool: &str, server: &str) -> Decision {
@@ -145,10 +168,11 @@ pub(crate) fn decide(inner: &Inner, tool: &str, server: &str) -> Decision {
     if is_read_only(tool, server) {
         return Decision::Allow;
     }
+    let key = permission_key(server, tool);
     let allowed = match inner.mode {
         ApprovalMode::Always => true,
-        ApprovalMode::Session => inner.session_allowed.contains(tool),
-        ApprovalMode::Ask => inner.always_allowed.contains(tool),
+        ApprovalMode::Session => inner.session_allowed.contains(&key),
+        ApprovalMode::Ask => inner.always_allowed.contains(&key),
     };
     if allowed {
         Decision::Allow
@@ -189,9 +213,9 @@ impl Permissions {
         self.save();
     }
 
-    pub fn allow_always(&self, tool: &str) {
+    pub fn allow_always(&self, server: &str, tool: &str) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.always_allowed.insert(tool.to_string());
+            inner.always_allowed.insert(permission_key(server, tool));
         }
         self.save();
     }
@@ -203,15 +227,30 @@ impl Permissions {
         decide(&inner, tool, server) == Decision::Ask
     }
 
-    fn allow_session(&self, tool: &str) {
+    fn allow_session(&self, server: &str, tool: &str) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.session_allowed.insert(tool.to_string());
+            inner.session_allowed.insert(permission_key(server, tool));
+        }
+    }
+
+    /// 「不再询问」要记进当前模式真正会查的那个集合。
+    /// Ask 模式查 always_allowed、Session 模式查 session_allowed，
+    /// 记错集合会导致按钮点了没反应。
+    fn remember_in_current_mode(&self, server: &str, tool: &str) {
+        let mode = match self.inner.lock() {
+            Ok(inner) => inner.mode,
+            Err(_) => return,
+        };
+        match mode {
+            ApprovalMode::Ask => self.allow_always(server, tool),
+            ApprovalMode::Session => self.allow_session(server, tool),
+            ApprovalMode::Always => {}
         }
     }
 
     fn clear_pending(&self, id: &str) {
         if let Ok(mut inner) = self.inner.lock() {
-            if inner.pending.as_ref().map(|(pid, _)| pid == id).unwrap_or(false) {
+            if inner.pending.as_ref().map(|item| item.id == id).unwrap_or(false) {
                 inner.pending = None;
             }
         }
@@ -233,11 +272,16 @@ pub async fn ensure_allowed(
     let (tx, rx) = tokio::sync::oneshot::channel();
     {
         let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
-        if let Some((stale_id, stale)) = inner.pending.take() {
-            eprintln!("[permission] 丢弃过期的确认请求: {stale_id}");
-            let _ = stale.send(false);
+        if let Some(stale) = inner.pending.take() {
+            eprintln!("[permission] 丢弃过期的确认请求: {}", stale.id);
+            let _ = stale.sender.send(false);
         }
-        inner.pending = Some((id.clone(), tx));
+        inner.pending = Some(Pending {
+            id: id.clone(),
+            tool: tool.to_string(),
+            server: server.to_string(),
+            sender: tx,
+        });
     }
     let _ = app.emit(
         "chat://approval-request",
@@ -272,30 +316,26 @@ pub fn respond_approval(
     id: String,
     allowed: bool,
     remember: Option<String>,
-    tool: String,
 ) -> Result<(), String> {
     let state = app.state::<Permissions>();
-    {
+    // 工具名与归属服务取自后端记录的待确认请求，不用前端传参
+    let (tool, server) = {
         let mut inner = state.inner.lock().map_err(|error| error.to_string())?;
-        let Some((pending_id, sender)) = inner.pending.take() else {
+        let Some(pending) = inner.pending.take() else {
             return Err("没有待确认的请求".into());
         };
-        if pending_id != id {
-            inner.pending = Some((pending_id, sender));
+        if pending.id != id {
+            inner.pending = Some(pending);
             return Err("请求已过期".into());
         }
-        let _ = sender.send(allowed);
-    }
-    if allowed {
-        // 不可撤销的操作不接受「记住选择」
-        let locked = needs_confirmation_every_time(&tool, crate::tools::mcp::BUILTIN_SERVER);
-        if !locked {
-            match remember.as_deref() {
-                Some("session") => state.allow_session(&tool),
-                Some("always") => state.allow_always(&tool),
-                _ => {}
-            }
-        }
+        let _ = pending.sender.send(allowed);
+        (pending.tool, pending.server)
+    };
+    if allowed
+        && !needs_confirmation_every_time(&tool, &server)
+        && remember.as_deref() == Some("session")
+    {
+        state.remember_in_current_mode(&server, &tool);
     }
     Ok(())
 }
@@ -303,8 +343,8 @@ pub fn respond_approval(
 impl Permissions {
     pub fn begin_turn(&self) {
         if let Ok(mut inner) = self.inner.lock() {
-            if let Some((_, sender)) = inner.pending.take() {
-                let _ = sender.send(false);
+            if let Some(pending) = inner.pending.take() {
+                let _ = pending.sender.send(false);
             }
         }
     }
@@ -331,7 +371,10 @@ mod tests {
         assert!(is_read_only("read_file", "shell"));
         assert!(is_read_only("list_dir", "shell"));
         assert!(is_read_only("search", "shell"));
-        assert!(is_read_only("read_text_file", "filesystem"));
+        assert!(is_read_only("extract_pdf_images", "shell"));
+        assert!(is_read_only("render_pdf_pages", "shell"));
+        assert!(is_read_only("read_binary_info", "shell"));
+        assert!(is_read_only("read_document", "shell"));
         assert!(!is_read_only("write_file", "shell"));
         assert!(!is_read_only("run_command", "shell"));
         assert!(!is_read_only("edit_file", "shell"));
@@ -351,7 +394,7 @@ mod tests {
         let permissions = Permissions::in_memory();
         permissions.set_mode(ApprovalMode::Session);
         assert!(permissions.needs_approval("run_command", "shell"));
-        permissions.allow_session("run_command");
+        permissions.allow_session("shell", "run_command");
         assert!(!permissions.needs_approval("run_command", "shell"));
         assert!(permissions.needs_approval("write_file", "shell"));
     }
@@ -360,9 +403,44 @@ mod tests {
     fn ask_mode_honors_always_allowed_list() {
         let permissions = Permissions::in_memory();
         assert!(permissions.needs_approval("write_file", "shell"));
-        permissions.allow_always("write_file");
+        permissions.allow_always("shell", "write_file");
         assert!(!permissions.needs_approval("write_file", "shell"));
         assert!(permissions.needs_approval("run_command", "shell"));
+    }
+
+    #[test]
+    fn approvals_do_not_leak_across_servers() {
+        let permissions = Permissions::in_memory();
+        permissions.allow_always("shell", "write_file");
+        assert!(!permissions.needs_approval("write_file", "shell"));
+        // 同名工具挂在别的服务上不继承授权
+        assert!(permissions.needs_approval("write_file", "filesystem"));
+    }
+
+    #[test]
+    fn legacy_bare_keys_gain_a_server_prefix() {
+        assert_eq!(migrate_key("write_file".into()), "shell__write_file");
+        // 已经是带前缀的键原样保留
+        assert_eq!(
+            migrate_key("filesystem__read_text_file".into()),
+            "filesystem__read_text_file"
+        );
+    }
+
+    #[test]
+    fn remember_button_works_in_every_mode() {
+        // 「此工具不再询问」发的是 remember=session，
+        // 必须记进当前模式真正会查的集合，否则按钮点了没效果
+        for mode in [ApprovalMode::Ask, ApprovalMode::Session] {
+            let permissions = Permissions::in_memory();
+            permissions.set_mode(mode);
+            assert!(permissions.needs_approval("write_file", "shell"));
+            permissions.remember_in_current_mode("shell", "write_file");
+            assert!(
+                !permissions.needs_approval("write_file", "shell"),
+                "{mode:?} 模式下记住后不应再问"
+            );
+        }
     }
 
     fn fresh(mode: ApprovalMode) -> Inner {
@@ -398,7 +476,7 @@ mod tests {
     fn session_allow_is_per_tool() {
         let permissions = Permissions::in_memory();
         permissions.set_mode(ApprovalMode::Session);
-        permissions.allow_session("write_file");
+        permissions.allow_session("shell", "write_file");
         assert!(!permissions.needs_approval("write_file", "shell"));
         assert!(permissions.needs_approval("run_command", "shell"));
     }
@@ -427,12 +505,24 @@ mod tests {
     }
 
     #[test]
-    fn external_write_tools_require_approval() {
+    fn external_tools_are_never_auto_allowed() {
         let inner = fresh(ApprovalMode::default());
+        // 外部服务的工具名不可信，即使叫 read_* / list_* 也要确认
+        for tool in ["read_text_file", "list_directory", "get_pods", "search_nodes"] {
+            assert_eq!(decide(&inner, tool, "filesystem"), Decision::Ask, "{tool} 必须确认");
+        }
         assert_eq!(decide(&inner, "create_entities", "memory"), Decision::Ask);
-        assert_eq!(decide(&inner, "search_nodes", "memory"), Decision::Allow);
-        assert_eq!(decide(&inner, "read_text_file", "filesystem"), Decision::Allow);
         assert_eq!(decide(&inner, "write_file", "filesystem"), Decision::Ask);
+    }
+
+    #[test]
+    fn external_tools_need_explicit_allow() {
+        let mut inner = fresh(ApprovalMode::default());
+        inner
+            .always_allowed
+            .insert(permission_key("filesystem", "read_text_file"));
+        assert_eq!(decide(&inner, "read_text_file", "filesystem"), Decision::Allow);
+        assert_eq!(decide(&inner, "list_directory", "filesystem"), Decision::Ask);
     }
 
     #[test]
@@ -456,8 +546,12 @@ mod tests {
         for mode in [ApprovalMode::Ask, ApprovalMode::Session, ApprovalMode::Always] {
             let mut inner = fresh(mode);
             // 即使把它记进白名单也不放行
-            inner.always_allowed.insert("delete_files".into());
-            inner.session_allowed.insert("delete_files".into());
+            inner
+                .always_allowed
+                .insert(permission_key("shell", "delete_files"));
+            inner
+                .session_allowed
+                .insert(permission_key("shell", "delete_files"));
             assert_eq!(
                 decide(&inner, "delete_files", "shell"),
                 Decision::Ask,
@@ -475,7 +569,7 @@ mod tests {
     fn switching_mode_clears_other_scope() {
         let permissions = Permissions::in_memory();
         permissions.set_mode(ApprovalMode::Session);
-        permissions.allow_session("run_command");
+        permissions.allow_session("shell", "run_command");
         permissions.set_mode(ApprovalMode::Ask);
         assert!(permissions.needs_approval("run_command", "shell"));
     }
