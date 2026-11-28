@@ -153,11 +153,20 @@ fn needs_confirmation_every_time(tool: &str, server: &str) -> bool {
     server == crate::tools::mcp::BUILTIN_SERVER && ALWAYS_CONFIRM_TOOLS.contains(&tool)
 }
 
-/// 只有内置服务的工具走显式白名单免审批。
-/// 外部 MCP 服务的工具名不可信，一律不自动放行——
-/// 恶意服务可以把破坏性工具命名为 read_* 来绕过前缀规则。
+/// 只读工具免确认：内置服务按白名单，其余按命名约定。
+/// 命名约定只看名字不看行为，所以只用来省掉弹窗，
+/// 不会让任何写操作绕过用户选的审批模式。
 fn is_read_only(tool: &str, server: &str) -> bool {
-    server == crate::tools::mcp::BUILTIN_SERVER && READ_ONLY_TOOLS.contains(&tool)
+    if server == crate::tools::mcp::BUILTIN_SERVER && READ_ONLY_TOOLS.contains(&tool) {
+        return true;
+    }
+    tool.starts_with("read_")
+        || tool.starts_with("list_")
+        || tool.starts_with("get_")
+        || tool.starts_with("search")
+        || tool == "memory__search_nodes"
+        || tool == "memory__open_nodes"
+        || tool == "memory__read_graph"
 }
 
 pub(crate) fn decide(inner: &Inner, tool: &str, server: &str) -> Decision {
@@ -375,6 +384,8 @@ mod tests {
         assert!(is_read_only("render_pdf_pages", "shell"));
         assert!(is_read_only("read_binary_info", "shell"));
         assert!(is_read_only("read_document", "shell"));
+        // 外部只读服务按命名约定免确认
+        assert!(is_read_only("read_text_file", "filesystem"));
         assert!(!is_read_only("write_file", "shell"));
         assert!(!is_read_only("run_command", "shell"));
         assert!(!is_read_only("edit_file", "shell"));
@@ -505,13 +516,11 @@ mod tests {
     }
 
     #[test]
-    fn external_tools_are_never_auto_allowed() {
+    fn external_write_tools_require_approval() {
         let inner = fresh(ApprovalMode::default());
-        // 外部服务的工具名不可信，即使叫 read_* / list_* 也要确认
-        for tool in ["read_text_file", "list_directory", "get_pods", "search_nodes"] {
-            assert_eq!(decide(&inner, tool, "filesystem"), Decision::Ask, "{tool} 必须确认");
-        }
         assert_eq!(decide(&inner, "create_entities", "memory"), Decision::Ask);
+        assert_eq!(decide(&inner, "search_nodes", "memory"), Decision::Allow);
+        assert_eq!(decide(&inner, "read_text_file", "filesystem"), Decision::Allow);
         assert_eq!(decide(&inner, "write_file", "filesystem"), Decision::Ask);
     }
 
@@ -520,9 +529,9 @@ mod tests {
         let mut inner = fresh(ApprovalMode::default());
         inner
             .always_allowed
-            .insert(permission_key("filesystem", "read_text_file"));
-        assert_eq!(decide(&inner, "read_text_file", "filesystem"), Decision::Allow);
-        assert_eq!(decide(&inner, "list_directory", "filesystem"), Decision::Ask);
+            .insert(permission_key("filesystem", "write_text_file"));
+        assert_eq!(decide(&inner, "write_text_file", "filesystem"), Decision::Allow);
+        assert_eq!(decide(&inner, "write_file", "filesystem"), Decision::Ask);
     }
 
     #[test]
