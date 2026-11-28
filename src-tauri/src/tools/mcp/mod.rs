@@ -288,7 +288,7 @@ impl McpManager {
             let _ = client.1.cancel().await;
         }
         self.tools.lock().await.clear();
-        self.errors.lock().ok().map(|mut map| map.clear());
+        if let Ok(mut map) = self.errors.lock() { map.clear() }
         let mut all = self.builtin_tools();
         let configs: Vec<McpServerConfig> = self
             .configs()
@@ -336,18 +336,6 @@ impl McpManager {
         builtin::tool_names().contains(&tool) || files::tool_names().contains(&tool)
     }
 
-    /// 不带媒体通道的调用入口。
-    #[allow(dead_code)]
-    pub async fn call(
-        &self,
-        app: &tauri::AppHandle,
-        server: &str,
-        tool: &str,
-        arguments: Value,
-    ) -> Result<String, String> {
-        self.call_with_media(app, server, tool, arguments, None).await
-    }
-
     pub async fn call_with_media(
         &self,
         app: &tauri::AppHandle,
@@ -375,17 +363,6 @@ impl McpManager {
             return Err(result_text(&result));
         }
         Ok(result_text(&result))
-    }
-
-    /// 不带媒体通道的内置工具入口。
-    #[allow(dead_code)]
-    pub async fn call_builtin(
-        &self,
-        app: &tauri::AppHandle,
-        tool: &str,
-        arguments: Value,
-    ) -> Result<String, String> {
-        self.call_builtin_with(app, tool, arguments, None).await
     }
 
     pub async fn call_builtin_with(

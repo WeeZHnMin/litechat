@@ -448,7 +448,7 @@ mod tests {
                     "command": "Write-Output \"PWD=$((Get-Location).Path)\"",
                     "cwd": elsewhere.display().to_string()
                 }),
-                &std::path::Path::new("C:\\"),
+                std::path::Path::new("C:\\"),
             ))
             .expect("命令应能执行");
         let line = output

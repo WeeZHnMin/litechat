@@ -613,7 +613,6 @@ export function initComposer({ appendMessage, onStop, onReasoningChange, onModel
     setBusy,
     setReasoningEffort,
     setModel,
-    getEffort: () => effort,
     getText: () => input.value,
   };
 }

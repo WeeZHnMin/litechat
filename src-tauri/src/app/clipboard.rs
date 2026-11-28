@@ -107,8 +107,7 @@ fn write_clipboard(image: &image::RgbaImage) -> Result<(), String> {
             LocalFree(global);
             return Err("无法打开剪贴板".into());
         }
-        let handle = global as *mut std::ffi::c_void;
-        let ok = EmptyClipboard() != 0 && !SetClipboardData(CF_DIB, handle).is_null();
+        let ok = EmptyClipboard() != 0 && !SetClipboardData(CF_DIB, global).is_null();
         CloseClipboard();
         if !ok {
             LocalFree(global);

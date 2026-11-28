@@ -118,7 +118,7 @@ fn register_all(
                 continue;
             }
         };
-        match shortcuts.register(parsed.clone()) {
+        match shortcuts.register(parsed) {
             Ok(()) => registered.push(parsed),
             Err(error) => failures.push(ShortcutFailure {
                 action: action.into(),
@@ -242,18 +242,18 @@ pub fn update_shortcut(
     ];
     let shortcuts = app.global_shortcut();
     for shortcut in &previous_shortcuts {
-        shortcuts.unregister(shortcut.clone()).map_err(|error| error.to_string())?;
+        shortcuts.unregister(*shortcut).map_err(|error| error.to_string())?;
     }
     let rollback = || {
         for shortcut in &next_shortcuts {
-            let _ = shortcuts.unregister(shortcut.clone());
+            let _ = shortcuts.unregister(*shortcut);
         }
         for shortcut in &previous_shortcuts {
-            let _ = shortcuts.register(shortcut.clone());
+            let _ = shortcuts.register(*shortcut);
         }
     };
     for shortcut in &next_shortcuts {
-        if let Err(error) = shortcuts.register(shortcut.clone()) {
+        if let Err(error) = shortcuts.register(*shortcut) {
             rollback();
             return Err(error.to_string());
         }

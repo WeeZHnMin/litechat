@@ -64,7 +64,7 @@ pub fn extract(root: &Path, source: &Path, bytes: &[u8]) -> Result<ImageExtracti
     let mut index = 0usize;
     let mut skipped_filters: Vec<String> = Vec::new();
 
-    for (_id, object) in &doc.objects {
+    for object in doc.objects.values() {
         if result.images.len() >= MAX_IMAGES {
             result
                 .notes

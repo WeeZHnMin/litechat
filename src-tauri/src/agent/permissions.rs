@@ -16,18 +16,13 @@ pub const READ_ONLY_TOOLS: [&str; 10] = [
     "read_media_file",
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ApprovalMode {
+    #[default]
     Ask,
     Session,
     Always,
-}
-
-impl Default for ApprovalMode {
-    fn default() -> Self {
-        Self::Ask
-    }
 }
 
 #[derive(Clone, Serialize)]
